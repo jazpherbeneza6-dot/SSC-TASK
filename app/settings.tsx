@@ -108,9 +108,10 @@ export default function SettingsScreen() {
           try {
             await signOut(auth);
             setUser(null);
-            router.push('/signin');
+            router.replace('/');
           } catch (error) {
             console.error(error);
+            Alert.alert('Error', 'Failed to sign out. Please try again.');
           }
         },
       },
@@ -152,7 +153,7 @@ export default function SettingsScreen() {
         <View className="flex-row items-center gap-3">
           <TouchableOpacity
             activeOpacity={0.7}
-            onPress={() => router.back()}
+            onPress={() => router.canGoBack() ? router.back() : router.replace('/')}
             className="bg-card/20 w-9 h-9 rounded-full items-center justify-center"
           >
             <Ionicons name="arrow-back" size={18} color={darkMode ? '#ffffff' : '#151515'} />

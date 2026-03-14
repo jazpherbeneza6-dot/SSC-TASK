@@ -27,6 +27,8 @@ import { useAuth } from '@/hooks/useAuth';
 type Member = {
   id: string;
   firstname: string;
+  lastname?: string;
+  photo_url?: string;
   email: string;
   role: 'admin' | 'member';
   joinedAt: any;
@@ -35,6 +37,8 @@ type Member = {
 type UserResult = {
   id: string;
   firstname: string;
+  lastname?: string;
+  photo_url?: string;
   email: string;
   role: string;
   position?: string;
@@ -56,7 +60,7 @@ const Avatar = ({ name, size = 40 }: { name: string; size?: number }) => {
 
 export default function InviteMembersScreen() {
   const router = useRouter();
-  const { id: roomId } = useLocalSearchParams<{ roomId: string }>();
+  const { id: roomId } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
 
   const [roomCode, setRoomCode]       = useState('');
@@ -259,7 +263,7 @@ export default function InviteMembersScreen() {
     <View className="flex-1 bg-background mt-5">
       {/* Header */}
       <View className="flex-row items-center gap-3 px-5 pt-safe pb-4 border-b border-border bg-background">
-        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7}>
+        <TouchableOpacity onPress={() => router.canGoBack() ? router.back() : router.replace('/')} activeOpacity={0.7}>
           <Ionicons name="arrow-back" size={22} color="#6b7280" />
         </TouchableOpacity>
         <View className="flex-1">

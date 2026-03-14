@@ -1,6 +1,6 @@
 import { Text } from '@/components/ui/text';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ScrollView, View, TouchableOpacity, RefreshControl, Alert } from 'react-native';
+import { ScrollView, View, TouchableOpacity, RefreshControl, Alert, ActivityIndicator } from 'react-native';
 import { useAuth } from '@/hooks/useAuth';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -38,10 +38,25 @@ const ATTENDANCE_META: Record<
   late:    { label: 'Late',    color: '#f59e0b', bg: 'bg-amber-50 dark:bg-amber-950/50', icon: 'time'             },
 };
 
+const parseDate = (dateStr: string | null): Date | null => {
+  if (!dateStr) return null;
+  // Handle M/D/YY or M/D/YYYY
+  const parts = dateStr.split('/');
+  if (parts.length === 3) {
+    let [m, d, y] = parts.map(Number);
+    if (!isNaN(m) && !isNaN(d) && !isNaN(y)) {
+      // Adjust 2-digit year
+      if (y < 100) y += 2000;
+      return new Date(y, m - 1, d);
+    }
+  }
+  const d = new Date(dateStr);
+  return isNaN(d.getTime()) ? null : d;
+};
+
 const getDueLabel = (dueDate: string | null) => {
-  if (!dueDate) return null;
-  const d = new Date(dueDate);
-  if (isNaN(d.getTime())) return null;
+  const d = parseDate(dueDate);
+  if (!d) return null;
   const now = new Date();
   now.setHours(0, 0, 0, 0);
   d.setHours(0, 0, 0, 0);
@@ -67,6 +82,16 @@ const TaskCard = ({
 }) => {
   const p   = PRIORITY_META[task.priority] ?? PRIORITY_META.medium;
   const due = getDueLabel(task.dueDate);
+
+  // Check if task is overdue and not completed = incomplete
+  const isIncomplete = !task.completed && task.dueDate && (() => {
+    const d = parseDate(task.dueDate);
+    if (!d) return false;
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime() < now.getTime();
+  })();
 
   return (
     <TouchableOpacity
@@ -119,6 +144,12 @@ const TaskCard = ({
               <View className="flex-row items-center gap-1 bg-blue-50 dark:bg-blue-950 px-2 py-0.5 rounded-md">
                 <Ionicons name="people-outline" size={10} color="#3b82f6" />
                 <Text className="text-xs text-blue-500 font-medium">{task.assignees.length}</Text>
+              </View>
+            )}
+            {isIncomplete && (
+              <View className="flex-row items-center gap-1 bg-red-50 dark:bg-red-950/50 px-2 py-0.5 rounded-md">
+                <Ionicons name="alert-circle" size={10} color="#ef4444" />
+                <Text className="text-xs font-bold text-red-500">Incomplete</Text>
               </View>
             )}
           </View>
@@ -246,39 +277,29 @@ const AttendanceCard = ({
             Only this member can mark their own attendance
           </Text>
         </View>
-      ) : (
-        <View className="flex-row gap-2">
-          {(['present', 'late', 'absent'] as const).map((s) => {
-            const meta     = ATTENDANCE_META[s];
-            const isActive = status === s;
-            return (
-              <TouchableOpacity
-                key={s}
-                onPress={() => !isMarking && onMark(member.id, isActive ? null : s)}
-                activeOpacity={0.7}
-                disabled={isMarking}
-                className={`flex-1 flex-row items-center justify-center gap-1.5 py-1.5 rounded-lg border ${
-                  isActive
-                    ? 'border-transparent'
-                    : 'border-border bg-card'
-                } ${isMarking ? 'opacity-50' : ''}`}
-                style={isActive ? { backgroundColor: meta.color + '20', borderColor: meta.color + '60' } : {}}
-              >
-                <Ionicons
-                  name={meta.icon as any}
-                  size={13}
-                  color={isActive ? meta.color : '#9ca3af'}
-                />
-                <Text
-                  className="text-xs font-semibold"
-                  style={{ color: isActive ? meta.color : '#9ca3af' }}
-                >
-                  {meta.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
+      ) : status ? (
+        <View className="bg-gray-50 dark:bg-gray-800/50 rounded-lg px-3 py-2 flex-row items-center gap-2">
+          <Ionicons name="checkmark-circle-outline" size={12} color="#22c55e" />
+          <Text className="text-xs text-green-600 font-medium">
+            Your attendance is marked as {statusMeta?.label}.
+          </Text>
         </View>
+      ) : (
+        <TouchableOpacity
+          onPress={() => !isMarking && onMark(member.id, 'present')}
+          activeOpacity={0.7}
+          disabled={isMarking}
+          className={`bg-primary rounded-xl py-2.5 items-center flex-row justify-center gap-2 ${isMarking ? 'opacity-50' : ''}`}
+        >
+          {isMarking ? (
+            <ActivityIndicator size="small" color="white" />
+          ) : (
+            <>
+              <Ionicons name="hand-right-outline" size={16} color="white" />
+              <Text className="text-sm font-bold text-white">Mark Presence</Text>
+            </>
+          )}
+        </TouchableOpacity>
       )}
     </View>
   );
@@ -418,9 +439,23 @@ export default function MemberRoomScreen() {
 
   const myTasks      = tasks.filter((t) => t.assignees?.includes(user?.uid));
   const displayTasks = filterMine ? myTasks : tasks;
-  const pending      = displayTasks.filter((t) => !t.completed);
+  const allPending   = displayTasks.filter((t) => !t.completed);
   const completed    = displayTasks.filter((t) =>  t.completed);
   const myPending    = myTasks.filter((t) => !t.completed).length;
+
+  // Check if a task is overdue
+  const isOverdue = (t: any) => {
+    const d = parseDate(t.dueDate);
+    if (!d) return false;
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime() < now.getTime();
+  };
+
+  const myIncomplete = myTasks.filter((t) => !t.completed && isOverdue(t)).length;
+  const incomplete   = allPending.filter((t) => isOverdue(t));
+  const pending      = allPending.filter((t) => !isOverdue(t));
 
   if (loading || !room) {
     return (
@@ -445,16 +480,22 @@ export default function MemberRoomScreen() {
       {/* Header */}
       <View className="bg-primary pt-safe pb-4 px-5">
         <View className="flex-row items-center justify-between mb-3">
-          <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7}>
+          <TouchableOpacity onPress={() => router.canGoBack() ? router.back() : router.replace('/')} activeOpacity={0.7}>
             <Ionicons name="arrow-back" size={24} color="white" />
           </TouchableOpacity>
-          {myPending > 0 && (
+          {myIncomplete > 0 ? (
+            <View className="bg-red-500/80 rounded-full px-3 py-1">
+              <Text className="text-white text-xs font-bold">
+                {myIncomplete} incomplete
+              </Text>
+            </View>
+          ) : myPending > 0 ? (
             <View className="bg-white/20 rounded-full px-3 py-1">
               <Text className="text-white text-xs font-bold">
                 {myPending} pending for you
               </Text>
             </View>
-          )}
+          ) : null}
         </View>
         <Text className="text-white text-xl font-bold mb-1">{room.name}</Text>
         <View className="flex-row items-center gap-2">
@@ -561,6 +602,22 @@ export default function MemberRoomScreen() {
               </View>
             ) : (
               <>
+                {incomplete.length > 0 && (
+                  <View className="mb-3">
+                    <Text className="text-xs font-bold text-red-500 uppercase tracking-wider mb-2">
+                      Incomplete · {incomplete.length}
+                    </Text>
+                    {incomplete.map((task) => (
+                      <TaskCard
+                        key={task.id}
+                        task={task}
+                        isAssignedToMe={task.assignees?.includes(user?.uid)}
+                        onToggle={handleToggle}
+                        onPress={(t) => router.push(`/(member)/rooms/${id}/tasks/${t.id}` as any)}
+                      />
+                    ))}
+                  </View>
+                )}
                 {pending.length > 0 && (
                   <View className="mb-3">
                     <Text className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">

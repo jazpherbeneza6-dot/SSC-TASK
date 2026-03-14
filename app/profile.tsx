@@ -178,10 +178,10 @@ export default function ProfileScreen() {
                   if (isDirty) {
                     Alert.alert('Discard changes?', 'You have unsaved changes.', [
                       { text: 'Keep editing', style: 'cancel' },
-                      { text: 'Discard', style: 'destructive', onPress: () => router.back() },
+                      { text: 'Discard', style: 'destructive', onPress: () => router.canGoBack() ? router.back() : router.replace('/') },
                     ]);
                   } else {
-                    router.back();
+                    router.canGoBack() ? router.back() : router.replace('/');
                   }
                 }}
                 className="w-9 h-9 rounded-full items-center justify-center"

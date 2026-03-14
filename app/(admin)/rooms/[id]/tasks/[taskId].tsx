@@ -8,6 +8,7 @@ import {
   Alert,
   Modal,
   FlatList,
+  Linking,
 } from 'react-native';
 import { useAuth } from '@/hooks/useAuth';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -24,6 +25,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '@/FirebaseConfig';
 import { Image } from 'expo-image';
+import { NativeVideoPlayer } from '@/components/NativeVideoPlayer';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -41,6 +43,7 @@ type Task = {
   createdAt: any;
   // Proof fields
   proof_url: string | null;
+  proof_attachments?: string[];
   proof_submitted_at: string | null;
   proof_submitted_by: string | null;
 };
@@ -163,6 +166,11 @@ export default function TaskDetailsScreen() {
 
   // Proof viewer
   const [viewerVisible, setViewerVisible] = useState(false);
+  const [selectedProofUri, setSelectedProofUri] = useState<string | null>(null);
+
+  // Video viewer
+  const [videoViewerVisible, setVideoViewerVisible] = useState(false);
+  const [selectedVideoUri, setSelectedVideoUri] = useState<string | null>(null);
 
   // ── Fetch ────────────────────────────────────────────────────────────────
 
@@ -239,7 +247,7 @@ export default function TaskDetailsScreen() {
   const handleDelete = async () => {
     try {
       await deleteDoc(doc(db, 'rooms', id, 'tasks', taskId));
-      router.back();
+      router.canGoBack() ? router.back() : router.replace('/');
     } catch (e) {
       Alert.alert('Error', 'Failed to delete task.');
     }
@@ -273,7 +281,7 @@ export default function TaskDetailsScreen() {
       <View className="flex-1 bg-background items-center justify-center gap-3">
         <Ionicons name="alert-circle-outline" size={40} color="#9ca3af" />
         <Text className="text-sm text-gray-400">Task not found</Text>
-        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7} className="bg-primary rounded-xl px-5 py-2">
+        <TouchableOpacity onPress={() => router.canGoBack() ? router.back() : router.replace('/')} activeOpacity={0.7} className="bg-primary rounded-xl px-5 py-2">
           <Text className="text-white font-medium text-sm">Go Back</Text>
         </TouchableOpacity>
       </View>
@@ -282,7 +290,7 @@ export default function TaskDetailsScreen() {
 
   const pCfg      = PRIORITY_CONFIG[task.priority] ?? PRIORITY_CONFIG.medium;
   const dueStatus = getDueStatus(task.dueDate);
-  const hasProof  = !!task.proof_url;
+  const hasProof  = !!task.proof_url || (task.proof_attachments && task.proof_attachments.length > 0);
 
   const submittedByName = task.proof_submitted_by
     ? members.find((m) => m.id === task.proof_submitted_by)?.displayName
@@ -296,17 +304,15 @@ export default function TaskDetailsScreen() {
     <View className="flex-1 bg-background">
 
       {/* Proof photo full-screen viewer */}
-      {hasProof && (
-        <ProofViewerModal
-          visible={viewerVisible}
-          uri={task.proof_url!}
-          onClose={() => setViewerVisible(false)}
-        />
-      )}
+      <ProofViewerModal
+        visible={viewerVisible}
+        uri={selectedProofUri || task.proof_url || ''}
+        onClose={() => setViewerVisible(false)}
+      />
 
       {/* ── Header ─────────────────────────────────────────────────────── */}
       <View className="flex-row items-center gap-3 px-5 pt-safe pb-4 border-b border-border bg-background mt-5">
-        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7}>
+        <TouchableOpacity onPress={() => router.canGoBack() ? router.back() : router.replace('/')} activeOpacity={0.7}>
           <Ionicons name="arrow-back" size={22} color="#6b7280" />
         </TouchableOpacity>
         <Text className="text-base font-bold text-gray-800 dark:text-white flex-1" numberOfLines={1}>
@@ -351,6 +357,8 @@ export default function TaskDetailsScreen() {
           )}
         </View>
       </View>
+
+
 
       <ScrollView
         className="flex-1"
@@ -424,23 +432,62 @@ export default function TaskDetailsScreen() {
             )}
           </View>
 
-          {hasProof ? (
+          {task.proof_attachments && task.proof_attachments.length > 0 ? (
             <View>
-              {/* Tappable photo */}
-              <TouchableOpacity activeOpacity={0.9} onPress={() => setViewerVisible(true)}>
-                <Image
-                  source={{ uri: task.proof_url! }}
-                  style={{ width: '100%', height: 220 }}
-                  contentFit="cover"
-                />
-                <View className="absolute bottom-2 right-2 bg-black/50 rounded-lg px-2 py-1 flex-row items-center gap-1">
-                  <Ionicons name="expand-outline" size={11} color="white" />
-                  <Text className="text-white text-xs">Tap to expand</Text>
-                </View>
-              </TouchableOpacity>
+              {/* Attachments list */}
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                className="py-4 px-4"
+                contentContainerStyle={{ gap: 12 }}
+              >
+                {task.proof_attachments.map((url: string, idx: number) => {
+                  const isVideo = ['mp4', 'mov', 'm4v', '3gp', 'avi', 'mkv'].some(ext => url.toLowerCase().endsWith('.' + ext)) || url.toLowerCase().includes('video');
+                  
+                  return (
+                    <View key={idx} className="w-48 rounded-2xl overflow-hidden border border-border bg-gray-100 dark:bg-gray-800">
+                      {isVideo ? (
+                        <TouchableOpacity
+                          activeOpacity={0.9}
+                          onPress={() => {
+                            setSelectedVideoUri(url);
+                            setVideoViewerVisible(true);
+                          }}
+                          className="flex-1 h-32 items-center justify-center p-4"
+                        >
+                          <Ionicons name="play-circle" size={48} color="#6366f1" />
+                          <Text className="text-[10px] text-gray-500 mt-2 text-center" numberOfLines={1}>
+                            Tap to play video
+                          </Text>
+                          <View className="mt-2 bg-primary/10 px-2 py-0.5 rounded-md">
+                            <Text className="text-[10px] text-primary font-bold">Video Proof</Text>
+                          </View>
+                        </TouchableOpacity>
+                      ) : (
+                        <TouchableOpacity
+                          activeOpacity={0.9}
+                          onPress={() => {
+                            setSelectedProofUri(url);
+                            setViewerVisible(true);
+                          }}
+                        >
+                          <Image
+                            source={{ uri: url }}
+                            style={{ width: '100%', height: 128 }}
+                            contentFit="cover"
+                          />
+                          <View className="absolute bottom-2 right-2 bg-black/50 rounded-lg px-2 py-1">
+                            <Ionicons name="expand-outline" size={10} color="white" />
+                          </View>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  );
+                })}
+              </ScrollView>
 
               {/* Meta info */}
-              <View className="px-4 py-3 gap-1.5">
+              <View className="px-4 pb-3 pt-1 gap-1.5 border-t border-border/50">
                 {task.proof_submitted_at ? (
                   <View className="flex-row items-center gap-1.5">
                     <Ionicons name="time-outline" size={12} color="#9ca3af" />
@@ -462,6 +509,44 @@ export default function TaskDetailsScreen() {
                 ) : null}
               </View>
             </View>
+          ) : task.proof_url ? (
+            <View>
+              {/* Backward compatibility with single proof_url */}
+              <TouchableOpacity
+                activeOpacity={0.9}
+                onPress={() => {
+                  setSelectedProofUri(task.proof_url);
+                  setViewerVisible(true);
+                }}
+              >
+                <Image
+                  source={{ uri: task.proof_url! }}
+                  style={{ width: '100%', height: 220 }}
+                  contentFit="cover"
+                />
+                <View className="absolute bottom-2 right-2 bg-black/50 rounded-lg px-2 py-1 flex-row items-center gap-1">
+                  <Ionicons name="expand-outline" size={11} color="white" />
+                  <Text className="text-white text-xs">Tap to expand</Text>
+                </View>
+              </TouchableOpacity>
+
+              <View className="px-4 py-3 gap-1.5">
+                {task.proof_submitted_at && (
+                  <View className="flex-row items-center gap-1.5">
+                    <Ionicons name="time-outline" size={12} color="#9ca3af" />
+                    <Text className="text-xs text-gray-400">
+                      Submitted on {new Date(task.proof_submitted_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+                    </Text>
+                  </View>
+                )}
+                {submittedByName ? (
+                  <View className="flex-row items-center gap-1.5">
+                    <Ionicons name="person-outline" size={12} color="#9ca3af" />
+                    <Text className="text-xs text-gray-400">By {submittedByName}</Text>
+                  </View>
+                ) : null}
+              </View>
+            </View>
           ) : (
             <View className="px-4 py-6 items-center gap-2">
               <View className="w-12 h-12 rounded-2xl bg-gray-100 dark:bg-gray-800 items-center justify-center">
@@ -469,7 +554,7 @@ export default function TaskDetailsScreen() {
               </View>
               <Text className="text-sm text-gray-400 text-center">No proof submitted yet</Text>
               <Text className="text-xs text-gray-300 dark:text-gray-600 text-center">
-                A photo will appear here once the assigned member marks the task complete.
+                A photo or video will appear here once the assigned member marks the task complete.
               </Text>
             </View>
           )}
@@ -727,6 +812,36 @@ export default function TaskDetailsScreen() {
                 <Text className="text-white font-medium">Delete</Text>
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Video Player Modal */}
+      <Modal
+        visible={videoViewerVisible}
+        transparent={false}
+        animationType="slide"
+        onRequestClose={() => setVideoViewerVisible(false)}
+      >
+        <View className="flex-1 bg-black pt-safe">
+          <View className="flex-row items-center justify-between px-4 py-4 border-b border-white/10">
+            <Text className="text-white font-bold">Video Proof Viewer</Text>
+            <TouchableOpacity 
+              onPress={() => setVideoViewerVisible(false)}
+              className="w-10 h-10 items-center justify-center rounded-full bg-white/10"
+            >
+              <Ionicons name="close" size={24} color="white" />
+            </TouchableOpacity>
+          </View>
+          
+          <View className="flex-1 justify-center p-4">
+            {selectedVideoUri && <NativeVideoPlayer url={selectedVideoUri} />}
+          </View>
+
+          <View className="p-8 items-center">
+             <Text className="text-white/40 text-xs text-center">
+               Experimental In-App Player
+             </Text>
           </View>
         </View>
       </Modal>

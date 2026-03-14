@@ -1,6 +1,6 @@
 import { Text } from '@/components/ui/text';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ScrollView, View, TouchableOpacity, Alert, ActivityIndicator, Modal } from 'react-native';
+import { ScrollView, View, TouchableOpacity, Alert, ActivityIndicator, Modal, Linking } from 'react-native';
 import { useAuth } from '@/hooks/useAuth';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -14,8 +14,9 @@ import {
 } from 'firebase/firestore';
 import { db } from '@/FirebaseConfig';
 import * as ImagePicker from 'expo-image-picker';
-import { uploadImage } from '@/utils/upload';
+import { uploadFile } from '@/utils/upload';
 import { Image } from 'expo-image';
+import { NativeVideoPlayer } from '@/components/NativeVideoPlayer';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -35,10 +36,25 @@ const formatTimestamp = (ts: any): string => {
   return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
 };
 
+const parseDate = (dateStr: string | null): Date | null => {
+  if (!dateStr) return null;
+  // Handle M/D/YY or M/D/YYYY
+  const parts = dateStr.split('/');
+  if (parts.length === 3) {
+    let [m, d, y] = parts.map(Number);
+    if (!isNaN(m) && !isNaN(d) && !isNaN(y)) {
+      // Adjust 2-digit year
+      if (y < 100) y += 2000;
+      return new Date(y, m - 1, d);
+    }
+  }
+  const d = new Date(dateStr);
+  return isNaN(d.getTime()) ? null : d;
+};
+
 const getDueStatus = (dueDate: string | null) => {
-  if (!dueDate) return null;
-  const d = new Date(dueDate);
-  if (isNaN(d.getTime())) return null;
+  const d = parseDate(dueDate);
+  if (!d) return null;
   const now = new Date();
   now.setHours(0, 0, 0, 0);
   d.setHours(0, 0, 0, 0);
@@ -79,29 +95,42 @@ const Avatar = ({ name, size = 32 }: { name: string; size?: number }) => {
 
 // ─── Proof of Completion Modal ────────────────────────────────────────────────
 
+type PickedFile = {
+  uri: string;
+  type: 'image' | 'video';
+  name: string;
+  mimeType: string;
+};
+
 type ProofModalProps = {
   visible: boolean;
   onClose: () => void;
-  onSubmit: (localUri: string) => Promise<void>;
+  onSubmit: (files: PickedFile[]) => Promise<void>;
   uploading: boolean;
 };
 
 const ProofModal = ({ visible, onClose, onSubmit, uploading }: ProofModalProps) => {
-  const [pickedUri, setPickedUri] = useState<string | null>(null);
+  const [pickedFiles, setPickedFiles] = useState<PickedFile[]>([]);
 
   const handlePick = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Please allow access to your photo library.');
+      Alert.alert('Permission needed', 'Please allow access to your photo/video library.');
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
+      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      allowsMultipleSelection: true,
       quality: 0.8,
     });
-    if (!result.canceled && result.assets[0]) {
-      setPickedUri(result.assets[0].uri);
+    if (!result.canceled) {
+      const newFiles: PickedFile[] = result.assets.map(asset => ({
+        uri: asset.uri,
+        type: asset.type === 'video' ? 'video' : 'image',
+        name: asset.fileName || `${asset.type || 'file'}-${Date.now()}.${asset.uri.split('.').pop()}`,
+        mimeType: asset.mimeType || (asset.type === 'video' ? 'video/mp4' : 'image/jpeg'),
+      }));
+      setPickedFiles(prev => [...prev, ...newFiles]);
     }
   };
 
@@ -112,23 +141,38 @@ const ProofModal = ({ visible, onClose, onSubmit, uploading }: ProofModalProps) 
       return;
     }
     const result = await ImagePicker.launchCameraAsync({
-      allowsEditing: true,
+      mediaTypes: ImagePicker.MediaTypeOptions.All,
       quality: 0.8,
     });
     if (!result.canceled && result.assets[0]) {
-      setPickedUri(result.assets[0].uri);
+      const asset = result.assets[0];
+      const uri = asset.uri;
+      const ext = uri.split('.').pop()?.toLowerCase() || 'jpg';
+      
+      setPickedFiles(prev => [...prev, {
+        uri: asset.uri,
+        type: asset.type === 'video' || ['mp4', 'mov', 'm4v'].includes(ext) ? 'video' : 'image',
+        name: asset.fileName || `capture-${Date.now()}.${ext}`,
+        mimeType: asset.mimeType || (asset.type === 'video' ? 'video/mp4' : 'image/jpeg'),
+      }]);
     }
   };
 
+  const removeFile = (index: number) => {
+    setPickedFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
   const handleConfirm = async () => {
-    if (!pickedUri) return;
-    await onSubmit(pickedUri);
-    setPickedUri(null);
+    if (pickedFiles.length === 0) return;
+    await onSubmit(pickedFiles);
+    setPickedFiles([]);
   };
 
   const handleClose = () => {
-    setPickedUri(null);
-    onClose();
+    if (!uploading) {
+      setPickedFiles([]);
+      onClose();
+    }
   };
 
   return (
@@ -145,40 +189,73 @@ const ProofModal = ({ visible, onClose, onSubmit, uploading }: ProofModalProps) 
             Upload a photo as proof before marking this task complete.
           </Text>
 
-          {/* Preview */}
-          {pickedUri ? (
-            <View className="mb-4 rounded-2xl overflow-hidden border border-border">
-              <Image
-                source={{ uri: pickedUri }}
-                style={{ width: '100%', height: 200 }}
-                contentFit="cover"
-              />
+          {/* Preview list */}
+          {pickedFiles.length > 0 && (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              className="mb-6"
+              contentContainerStyle={{ gap: 12 }}
+            >
+              {pickedFiles.map((file, idx) => (
+                <View key={idx} className="w-40 h-40 rounded-2xl overflow-hidden border border-border relative bg-gray-100 dark:bg-gray-800">
+                  {file.type === 'video' ? (
+                    <View className="flex-1 items-center justify-center">
+                      <Ionicons name="videocam" size={40} color="#6366f1" />
+                      <Text className="text-[10px] text-gray-500 mt-2 px-2 text-center" numberOfLines={1}>{file.name}</Text>
+                    </View>
+                  ) : (
+                    <Image
+                      source={{ uri: file.uri }}
+                      style={{ width: '100%', height: '100%' }}
+                      contentFit="cover"
+                    />
+                  )}
+                  <TouchableOpacity
+                    onPress={() => removeFile(idx)}
+                    disabled={uploading}
+                    activeOpacity={0.8}
+                    className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/60 items-center justify-center"
+                  >
+                    <Ionicons name="close" size={14} color="white" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+              
+              {/* Add more button */}
               <TouchableOpacity
-                onPress={() => setPickedUri(null)}
-                activeOpacity={0.8}
-                className="absolute top-2 right-2 w-8 h-8 rounded-full bg-black/60 items-center justify-center"
+                onPress={handlePick}
+                disabled={uploading}
+                className="w-40 h-40 rounded-2xl border-2 border-dashed border-border items-center justify-center gap-2"
               >
-                <Ionicons name="close" size={16} color="white" />
+                <Ionicons name="add-circle-outline" size={32} color="#9ca3af" />
+                <Text className="text-xs text-gray-400 font-medium">Add more</Text>
               </TouchableOpacity>
-            </View>
-          ) : (
-            /* Pick buttons */
-            <View className="flex-row gap-3 mb-4">
+            </ScrollView>
+          )}
+
+          {/* Pick buttons (only show if none selected) */}
+          {pickedFiles.length === 0 && (
+            <View className="flex-row gap-3 mb-6">
               <TouchableOpacity
                 onPress={handleCamera}
                 activeOpacity={0.8}
-                className="flex-1 bg-card border border-border rounded-2xl py-5 items-center gap-2"
+                className="flex-1 bg-card border border-border rounded-2xl py-6 items-center gap-2"
               >
-                <Ionicons name="camera-outline" size={26} color="#6366f1" />
-                <Text className="text-xs font-semibold text-gray-600 dark:text-gray-300">Camera</Text>
+                <View className="w-12 h-12 rounded-2xl bg-primary/10 items-center justify-center">
+                  <Ionicons name="camera-outline" size={26} color="#6366f1" />
+                </View>
+                <Text className="text-xs font-bold text-gray-600 dark:text-gray-300">Camera</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={handlePick}
                 activeOpacity={0.8}
-                className="flex-1 bg-card border border-border rounded-2xl py-5 items-center gap-2"
+                className="flex-1 bg-card border border-border rounded-2xl py-6 items-center gap-2"
               >
-                <Ionicons name="image-outline" size={26} color="#6366f1" />
-                <Text className="text-xs font-semibold text-gray-600 dark:text-gray-300">Gallery</Text>
+                <View className="w-12 h-12 rounded-2xl bg-primary/10 items-center justify-center">
+                  <Ionicons name="image-outline" size={26} color="#6366f1" />
+                </View>
+                <Text className="text-xs font-bold text-gray-600 dark:text-gray-300">Gallery</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -186,19 +263,19 @@ const ProofModal = ({ visible, onClose, onSubmit, uploading }: ProofModalProps) 
           {/* Actions */}
           <TouchableOpacity
             onPress={handleConfirm}
-            disabled={!pickedUri || uploading}
+            disabled={pickedFiles.length === 0 || uploading}
             activeOpacity={0.8}
-            className={`rounded-2xl py-4 items-center flex-row justify-center gap-2 mb-3 ${
-              pickedUri && !uploading ? 'bg-primary' : 'bg-gray-200 dark:bg-gray-700'
+            className={`rounded-2xl py-4 items-center flex-row justify-center gap-2 ${
+              pickedFiles.length > 0 && !uploading ? 'bg-primary' : 'bg-gray-200 dark:bg-gray-700'
             }`}
           >
             {uploading ? (
               <ActivityIndicator size="small" color="#ffffff" />
             ) : (
-              <Ionicons name="checkmark-circle-outline" size={18} color={pickedUri ? 'white' : '#9ca3af'} />
+              <Ionicons name="cloud-upload-outline" size={18} color={pickedFiles.length > 0 ? 'white' : '#9ca3af'} />
             )}
-            <Text className={`font-bold text-sm ${pickedUri && !uploading ? 'text-white' : 'text-gray-400'}`}>
-              {uploading ? 'Uploading…' : 'Submit & Complete'}
+            <Text className={`font-bold text-sm ${pickedFiles.length > 0 && !uploading ? 'text-white' : 'text-gray-400'}`}>
+              {uploading ? `Uploading ${pickedFiles.length} files...` : `Submit ${pickedFiles.length} Attachment${pickedFiles.length !== 1 ? 's' : ''}`}
             </Text>
           </TouchableOpacity>
 
@@ -248,7 +325,10 @@ export default function MemberTaskDetailScreen() {
   // Proof state
   const [proofModalVisible, setProofModalVisible]   = useState(false);
   const [viewerVisible, setViewerVisible]           = useState(false);
-  const [uploadingProof, setUploadingProof]         = useState(false);
+  const [selectedProofUri, setSelectedProofUri] = useState<string | null>(null);
+  const [videoViewerVisible, setVideoViewerVisible] = useState(false);
+  const [selectedVideoUri, setSelectedVideoUri] = useState<string | null>(null);
+  const [uploadingProof, setUploadingProof] = useState(false);
 
   useEffect(() => {
     if (!roomId || !taskId) return;
@@ -285,20 +365,29 @@ export default function MemberTaskDetailScreen() {
     setProofModalVisible(true);
   };
 
-  // ── Upload proof photo then mark task complete ────────────────────────────
-  const handleProofSubmit = async (localUri: string) => {
+  // ── Upload all picked files then mark task complete ──────────────────────────
+  const handleProofSubmit = async (files: PickedFile[]) => {
     setUploadingProof(true);
     try {
-      const uploadData = await uploadImage(localUri);
-      if (!uploadData?.url) {
-        Alert.alert('Upload failed', 'Could not upload photo. Please try again.');
+      const attachmentUrls: string[] = [];
+      
+      for (const file of files) {
+        const uploadData = await uploadFile(file.uri, file.name, file.mimeType);
+        if (uploadData?.url) {
+          attachmentUrls.push(uploadData.url);
+        }
+      }
+
+      if (attachmentUrls.length === 0) {
+        Alert.alert('Upload failed', 'No files could be uploaded. Please try again.');
         return;
       }
 
       const now = new Date().toISOString();
       const updates = {
         completed: true,
-        proof_url: uploadData.url,
+        proof_attachments: attachmentUrls,
+        proof_url: attachmentUrls[0], // Keep first for backward compatibility
         proof_submitted_at: now,
         proof_submitted_by: user?.uid ?? null,
       };
@@ -306,9 +395,10 @@ export default function MemberTaskDetailScreen() {
       await updateDoc(doc(db, 'rooms', roomId, 'tasks', taskId), updates);
       setTask((prev: any) => ({ ...prev, ...updates }));
       setProofModalVisible(false);
-    } catch (e) {
+    } catch (e: any) {
       console.error('Proof upload error:', e);
-      Alert.alert('Error', 'Failed to submit proof. Please try again.');
+      const msg = e.response?.data?.error || e.message || 'Failed to submit proof. Please try again.';
+      Alert.alert('Upload Error', msg);
     } finally {
       setUploadingProof(false);
     }
@@ -329,6 +419,7 @@ export default function MemberTaskDetailScreen() {
             const updates = {
               completed: false,
               proof_url: null,
+              proof_attachments: [],
               proof_submitted_at: null,
               proof_submitted_by: null,
             };
@@ -363,7 +454,7 @@ export default function MemberTaskDetailScreen() {
       <View className="flex-1 bg-background items-center justify-center gap-3 p-5">
         <Ionicons name="alert-circle-outline" size={40} color="#9ca3af" />
         <Text className="text-sm text-gray-400 text-center">Task not found</Text>
-        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7} className="bg-primary rounded-xl px-5 py-2">
+        <TouchableOpacity onPress={() => router.canGoBack() ? router.back() : router.replace('/')} activeOpacity={0.7} className="bg-primary rounded-xl px-5 py-2">
           <Text className="text-white font-medium text-sm">Go Back</Text>
         </TouchableOpacity>
       </View>
@@ -374,6 +465,16 @@ export default function MemberTaskDetailScreen() {
   const dueStatus      = getDueStatus(task.dueDate);
   const assignedMembers = members.filter((m) => task.assignees?.includes(m.id));
   const hasProof       = !!task.proof_url;
+
+  // Overdue + not completed = Incomplete
+  const isIncomplete = !task.completed && task.dueDate && (() => {
+    const d = parseDate(task.dueDate);
+    if (!d) return false;
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime() < now.getTime();
+  })();
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -389,17 +490,15 @@ export default function MemberTaskDetailScreen() {
       />
 
       {/* Proof photo full-screen viewer */}
-      {hasProof && (
-        <ProofViewerModal
-          visible={viewerVisible}
-          uri={task.proof_url}
-          onClose={() => setViewerVisible(false)}
-        />
-      )}
+      <ProofViewerModal
+        visible={viewerVisible}
+        uri={selectedProofUri || task.proof_url}
+        onClose={() => setViewerVisible(false)}
+      />
 
       {/* Header */}
       <View className="flex-row items-center gap-3 px-5 pt-safe pb-4 border-b border-border bg-background">
-        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7}>
+        <TouchableOpacity onPress={() => router.canGoBack() ? router.back() : router.replace('/')} activeOpacity={0.7}>
           <Ionicons name="arrow-back" size={22} color="#6b7280" />
         </TouchableOpacity>
         <View className="flex-1">
@@ -426,11 +525,13 @@ export default function MemberTaskDetailScreen() {
 
         {/* Status banner */}
         <TouchableOpacity
-          onPress={isAssignedToMe ? handleMarkComplete : undefined}
-          activeOpacity={isAssignedToMe ? 0.75 : 1}
+          onPress={isAssignedToMe && !isIncomplete ? handleMarkComplete : undefined}
+          activeOpacity={isAssignedToMe && !isIncomplete ? 0.75 : 1}
           className={`flex-row items-center gap-3 rounded-2xl p-4 border ${
             task.completed
               ? 'bg-green-50 dark:bg-green-950/40 border-green-200 dark:border-green-900'
+              : isIncomplete
+              ? 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900'
               : isAssignedToMe
               ? 'bg-primary/5 border-primary/20'
               : 'bg-card border-border'
@@ -440,12 +541,15 @@ export default function MemberTaskDetailScreen() {
             className={`w-7 h-7 rounded-full border-2 items-center justify-center ${
               task.completed
                 ? 'bg-green-500 border-green-500'
+                : isIncomplete
+                ? 'bg-red-500 border-red-500'
                 : isAssignedToMe
                 ? 'border-primary/60'
                 : 'border-gray-300 dark:border-gray-600'
             }`}
           >
             {task.completed && <Ionicons name="checkmark" size={14} color="white" />}
+            {isIncomplete && !task.completed && <Ionicons name="alert" size={14} color="white" />}
           </View>
 
           <View className="flex-1">
@@ -453,6 +557,8 @@ export default function MemberTaskDetailScreen() {
               className={`text-sm font-bold ${
                 task.completed
                   ? 'text-green-700 dark:text-green-400'
+                  : isIncomplete
+                  ? 'text-red-600 dark:text-red-400'
                   : isAssignedToMe
                   ? 'text-primary'
                   : 'text-gray-700 dark:text-gray-300'
@@ -460,6 +566,8 @@ export default function MemberTaskDetailScreen() {
             >
               {task.completed
                 ? 'Completed'
+                : isIncomplete
+                ? 'Incomplete'
                 : isAssignedToMe
                 ? 'Mark as complete'
                 : 'Pending'}
@@ -467,6 +575,8 @@ export default function MemberTaskDetailScreen() {
             <Text className="text-xs text-gray-400 mt-0.5">
               {task.completed
                 ? isAssignedToMe ? 'Tap to reopen' : 'This task is done'
+                : isIncomplete
+                ? 'This task is past its due date'
                 : isAssignedToMe
                 ? 'A photo proof is required to complete this task'
                 : 'Waiting to be completed'}
@@ -475,9 +585,9 @@ export default function MemberTaskDetailScreen() {
 
           {isAssignedToMe && (
             <Ionicons
-              name={task.completed ? 'checkmark-circle' : 'ellipse-outline'}
+              name={task.completed ? 'checkmark-circle' : isIncomplete ? 'alert-circle' : 'ellipse-outline'}
               size={22}
-              color={task.completed ? '#22c55e' : '#6366f1'}
+              color={task.completed ? '#22c55e' : isIncomplete ? '#ef4444' : '#6366f1'}
             />
           )}
         </TouchableOpacity>
@@ -527,24 +637,62 @@ export default function MemberTaskDetailScreen() {
             )}
           </View>
 
-          {hasProof ? (
+          {task.proof_attachments && task.proof_attachments.length > 0 ? (
             <View>
-              {/* Tappable photo */}
-              <TouchableOpacity activeOpacity={0.9} onPress={() => setViewerVisible(true)}>
-                <Image
-                  source={{ uri: task.proof_url }}
-                  style={{ width: '100%', height: 200 }}
-                  contentFit="cover"
-                />
-                {/* Tap-to-expand hint */}
-                <View className="absolute bottom-2 right-2 bg-black/50 rounded-lg px-2 py-1 flex-row items-center gap-1">
-                  <Ionicons name="expand-outline" size={11} color="white" />
-                  <Text className="text-white text-xs">Tap to expand</Text>
-                </View>
-              </TouchableOpacity>
+              {/* Attachments list */}
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                className="py-4 px-4"
+                contentContainerStyle={{ gap: 12 }}
+              >
+                {task.proof_attachments.map((url: string, idx: number) => {
+                  const isVideo = ['mp4', 'mov', 'm4v', '3gp', 'avi'].some(ext => url.toLowerCase().endsWith('.' + ext)) || url.toLowerCase().includes('video');
+                  
+                  return (
+                    <View key={idx} className="w-48 rounded-2xl overflow-hidden border border-border bg-gray-100 dark:bg-gray-800">
+                      {isVideo ? (
+                        <TouchableOpacity
+                          activeOpacity={0.9}
+                          onPress={() => {
+                            setSelectedVideoUri(url);
+                            setVideoViewerVisible(true);
+                          }}
+                          className="flex-1 h-32 items-center justify-center p-4"
+                        >
+                          <Ionicons name="play-circle" size={48} color="#6366f1" />
+                          <Text className="text-[10px] text-gray-500 mt-2 text-center" numberOfLines={1}>
+                            Tap to play video
+                          </Text>
+                          <View className="mt-2 bg-primary/10 px-2 py-0.5 rounded-md">
+                            <Text className="text-[10px] text-primary font-bold">Video Proof</Text>
+                          </View>
+                        </TouchableOpacity>
+                      ) : (
+                        <TouchableOpacity
+                          activeOpacity={0.9}
+                          onPress={() => {
+                            setSelectedProofUri(url);
+                            setViewerVisible(true);
+                          }}
+                        >
+                          <Image
+                            source={{ uri: url }}
+                            style={{ width: '100%', height: 128 }}
+                            contentFit="cover"
+                          />
+                          <View className="absolute bottom-2 right-2 bg-black/50 rounded-lg px-2 py-1">
+                            <Ionicons name="expand-outline" size={10} color="white" />
+                          </View>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  );
+                })}
+              </ScrollView>
 
               {/* Meta info */}
-              <View className="px-4 py-3 gap-1">
+              <View className="px-4 pb-3 pt-1 gap-1 border-t border-border/50">
                 {task.proof_submitted_at ? (
                   <View className="flex-row items-center gap-1.5">
                     <Ionicons name="time-outline" size={12} color="#9ca3af" />
@@ -571,19 +719,45 @@ export default function MemberTaskDetailScreen() {
                 ) : null}
               </View>
             </View>
-          ) : (
-            <View className="px-4 py-6 items-center gap-2">
-              <View className="w-12 h-12 rounded-2xl bg-gray-100 dark:bg-gray-800 items-center justify-center">
-                <Ionicons name="camera-outline" size={22} color="#9ca3af" />
+          ) : task.proof_url ? (
+            <View>
+              {/* Backward compatibility with single proof_url */}
+              <TouchableOpacity
+                activeOpacity={0.9}
+                onPress={() => {
+                  setSelectedProofUri(task.proof_url);
+                  setViewerVisible(true);
+                }}
+              >
+                <Image
+                  source={{ uri: task.proof_url }}
+                  style={{ width: '100%', height: 200 }}
+                  contentFit="cover"
+                />
+                <View className="absolute bottom-2 right-2 bg-black/50 rounded-lg px-2 py-1 flex-row items-center gap-1">
+                  <Ionicons name="expand-outline" size={11} color="white" />
+                  <Text className="text-white text-xs">Tap to expand</Text>
+                </View>
+              </TouchableOpacity>
+              
+              <View className="px-4 py-3 gap-1">
+                {task.proof_submitted_at && (
+                  <View className="flex-row items-center gap-1.5">
+                    <Ionicons name="time-outline" size={12} color="#9ca3af" />
+                    <Text className="text-xs text-gray-400">
+                      Submitted on {new Date(task.proof_submitted_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+                    </Text>
+                  </View>
+                )}
               </View>
-              <Text className="text-sm text-gray-400 text-center">
-                No proof submitted yet
-              </Text>
-              {isAssignedToMe && (
-                <Text className="text-xs text-gray-300 dark:text-gray-600 text-center">
-                  A photo will appear here once the task is marked complete.
-                </Text>
-              )}
+            </View>
+          ) : (
+            <View className="p-8 items-center justify-center">
+              <View className="w-12 h-12 rounded-2xl bg-gray-50 dark:bg-gray-800/50 items-center justify-center mb-3">
+                <Ionicons name="camera-outline" size={24} color="#9ca3af" />
+              </View>
+              <Text className="text-sm text-gray-400 font-medium text-center">No proof submitted yet</Text>
+              <Text className="text-xs text-gray-400/60 text-center mt-1">A photo or video will appear here once the task is marked complete.</Text>
             </View>
           )}
         </View>
@@ -666,15 +840,21 @@ export default function MemberTaskDetailScreen() {
             <View className={`flex-row items-center gap-1.5 px-2 py-0.5 rounded-md ${
               task.completed
                 ? 'bg-green-50 dark:bg-green-950/50'
+                : isIncomplete
+                ? 'bg-red-50 dark:bg-red-950/50'
                 : 'bg-amber-50 dark:bg-amber-950/50'
             }`}>
-              <View className={`w-1.5 h-1.5 rounded-full ${task.completed ? 'bg-green-500' : 'bg-amber-400'}`} />
+              <View className={`w-1.5 h-1.5 rounded-full ${
+                task.completed ? 'bg-green-500' : isIncomplete ? 'bg-red-500' : 'bg-amber-400'
+              }`} />
               <Text className={`text-xs font-semibold ${
                 task.completed
                   ? 'text-green-600 dark:text-green-400'
+                  : isIncomplete
+                  ? 'text-red-600 dark:text-red-400'
                   : 'text-amber-600 dark:text-amber-400'
               }`}>
-                {task.completed ? 'Completed' : 'Pending'}
+                {task.completed ? 'Completed' : isIncomplete ? 'Incomplete' : 'Pending'}
               </Text>
             </View>
           </View>
@@ -731,6 +911,36 @@ export default function MemberTaskDetailScreen() {
           </TouchableOpacity>
         </View>
       )}
+
+      {/* Video Player Modal */}
+      <Modal
+        visible={videoViewerVisible}
+        transparent={false}
+        animationType="slide"
+        onRequestClose={() => setVideoViewerVisible(false)}
+      >
+        <View className="flex-1 bg-black pt-safe">
+          <View className="flex-row items-center justify-between px-4 py-4 border-b border-white/10">
+            <Text className="text-white font-bold">Video Proof</Text>
+            <TouchableOpacity 
+              onPress={() => setVideoViewerVisible(false)}
+              className="w-10 h-10 items-center justify-center rounded-full bg-white/10"
+            >
+              <Ionicons name="close" size={24} color="white" />
+            </TouchableOpacity>
+          </View>
+          
+          <View className="flex-1 justify-center p-4">
+            {selectedVideoUri && <NativeVideoPlayer url={selectedVideoUri} />}
+          </View>
+
+          <View className="p-8 items-center">
+             <Text className="text-white/40 text-xs text-center">
+               Experimental In-App Player
+             </Text>
+          </View>
+        </View>
+      </Modal>
 
     </View>
   );

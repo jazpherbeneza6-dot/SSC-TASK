@@ -54,7 +54,7 @@ const StyledInput = ({
 
 export default function CreateTaskScreen() {
   const router = useRouter();
-  const { id: roomId } = useLocalSearchParams<{ roomId: string }>();
+  const { id: roomId } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
 
   const [title, setTitle] = useState('');
@@ -62,6 +62,10 @@ export default function CreateTaskScreen() {
   const [priority, setPriority] = useState<Priority>('medium');
   const [dueDate, setDueDate] = useState('');
   const [creating, setCreating] = useState(false);
+
+  // Folder
+  const [folder, setFolder] = useState('');
+  const [existingFolders, setExistingFolders] = useState<string[]>([]);
 
   // Assignee picker
   const [members, setMembers] = useState<any[]>([]);
@@ -71,7 +75,20 @@ export default function CreateTaskScreen() {
   useEffect(() => {
     if (!roomId) return;
     fetchMembers();
+    fetchFolders();
   }, [roomId]);
+
+  const fetchFolders = async () => {
+    try {
+      const snap = await getDocs(collection(db, 'rooms', roomId, 'tasks'));
+      const names = new Set<string>();
+      snap.docs.forEach((d) => {
+        const f = d.data().folder;
+        if (f && typeof f === 'string' && f.trim()) names.add(f.trim());
+      });
+      setExistingFolders(Array.from(names).sort());
+    } catch (_) {}
+  };
 
   const fetchMembers = async () => {
     try {
@@ -103,6 +120,7 @@ export default function CreateTaskScreen() {
         title: title.trim(),
         description: description.trim(),
         priority,
+        folder: folder.trim() || null,
         dueDate: dueDate.trim() || null,
         assignees: selectedAssignees,
         completed: false,
@@ -110,7 +128,7 @@ export default function CreateTaskScreen() {
         createdAt: serverTimestamp(),
       });
 
-      router.back();
+      router.canGoBack() ? router.back() : router.replace('/');
     } catch (e) {
       console.error(e);
       Alert.alert('Error', 'Failed to create task. Please try again.');
@@ -126,7 +144,7 @@ export default function CreateTaskScreen() {
     <View className="flex-1 bg-background">
       {/* Header */}
       <View className="flex-row items-center gap-3 px-5 pt-safe pb-4 border-b border-border bg-background mt-4">
-        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7}>
+        <TouchableOpacity onPress={() => router.canGoBack() ? router.back() : router.replace('/')} activeOpacity={0.7}>
           <Ionicons name="arrow-back" size={22} color="#6b7280" />
         </TouchableOpacity>
         <Text className="text-lg font-bold text-gray-800 dark:text-white flex-1">Create Task</Text>
@@ -164,6 +182,53 @@ export default function CreateTaskScreen() {
             multiline
             numberOfLines={4}
           />
+        </View>
+
+        {/* Folder */}
+        <View>
+          <SectionLabel>Folder</SectionLabel>
+          <View className="flex-row items-center bg-card border border-border rounded-xl px-4 py-3 gap-2">
+            <Ionicons name="folder-outline" size={16} color="#9ca3af" />
+            <TextInput
+              value={folder}
+              onChangeText={setFolder}
+              placeholder="Type folder name (optional)"
+              className="flex-1 text-sm text-gray-800 dark:text-white"
+              placeholderTextColor="#9ca3af"
+            />
+            {folder.length > 0 && (
+              <TouchableOpacity onPress={() => setFolder('')}>
+                <Ionicons name="close-circle" size={16} color="#9ca3af" />
+              </TouchableOpacity>
+            )}
+          </View>
+          {existingFolders.length > 0 && (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              className="mt-2"
+              contentContainerStyle={{ gap: 8 }}
+            >
+              {existingFolders.map((f) => {
+                const active = folder === f;
+                return (
+                  <TouchableOpacity
+                    key={f}
+                    onPress={() => setFolder(active ? '' : f)}
+                    activeOpacity={0.7}
+                    className={`flex-row items-center gap-1.5 px-3 py-1.5 rounded-full border ${
+                      active ? 'bg-primary border-primary' : 'bg-card border-border'
+                    }`}
+                  >
+                    <Ionicons name="folder" size={12} color={active ? 'white' : '#6b7280'} />
+                    <Text className={`text-xs font-semibold ${active ? 'text-white' : 'text-gray-600 dark:text-gray-400'}`}>
+                      {f}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          )}
         </View>
 
         {/* Priority */}

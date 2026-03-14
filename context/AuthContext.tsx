@@ -6,6 +6,8 @@ export type AuthUser = {
   firstname: string;
   lastname: string;
   photo_url: string;
+  position?: string;
+  signup_method?: string;
   role: "admin" | "member";
 } | null;
 

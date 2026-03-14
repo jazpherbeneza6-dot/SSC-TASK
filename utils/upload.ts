@@ -1,32 +1,68 @@
-import axios from 'axios';
+// Cloudinary Configuration
+const CLOUD_NAME = 'dinpseh3h';
+const UPLOAD_PRESET = 'Videos'; // Corrected from "VIdeos" based on screenshot
 
-export const uploadImage = async (uri: string) => {
+/**
+ * Standardizes URI for React Native FormData
+ */
+const normalizeUri = (uri: string) => {
+  return uri.startsWith('file://') ? uri : `file://${uri}`;
+};
+
+export const uploadFile = async (uri: string, filename: string, mimeType: string): Promise<{ url: string }> => {
   try {
-    const formData = new FormData();
-
-    formData.append('file', {
-      uri,
-      name: `image-${Date.now()}.jpg`,
-      type: 'image/jpeg',
-    } as any);
-
-    const response = await axios.post(
-      'https://api.lccgatepass.xyz/api/v1/upload/imagekit',
-      formData,
-      {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-          Accept: 'application/json',
-        },
-      }
-    );
+    console.log('Starting Cloudinary upload:', { filename, mimeType });
     
-    if(!response.data) throw new Error("Error, Maybe the server is busy or sleeping 😅");
+    // In React Native, FormData works best with the { uri, name, type } object pattern
+    const formData = new FormData();
+    formData.append('file', {
+      uri: normalizeUri(uri),
+      name: filename,
+      type: mimeType,
+    } as any);
+    
+    formData.append('upload_preset', UPLOAD_PRESET);
+    formData.append('cloud_name', CLOUD_NAME);
 
-    return response.data;
+    // Using XHR for better progress tracking and large file support in RN
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/auto/upload`, true);
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const response = JSON.parse(xhr.responseText);
+            console.log('Cloudinary Upload complete! URL:', response.secure_url);
+            resolve({ url: response.secure_url });
+          } catch (e) {
+            reject(new Error('Failed to parse Cloudinary response.'));
+          }
+        } else {
+          console.error('Cloudinary Error Status:', xhr.status);
+          console.error('Cloudinary Error Body:', xhr.responseText);
+          reject(new Error(`Server error: ${xhr.status}. Check your preset settings.`));
+        }
+      };
+
+      xhr.onerror = (e) => {
+        console.error('XHR Network Error:', e);
+        reject(new Error('Network error. Please check your internet or Cloudinary config.'));
+      };
+
+      // Progress logging
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const progress = (event.loaded / event.total) * 100;
+          console.log(`Cloudinary Upload progress: ${Math.round(progress)}%`);
+        }
+      };
+
+      xhr.send(formData);
+    });
 
   } catch (error: any) {
-    console.error(error.response ? error.response.data.error : error.message);
+    console.error('Upload Process Error:', error.message);
     throw error;
   }
 };

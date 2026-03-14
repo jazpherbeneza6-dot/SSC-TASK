@@ -121,7 +121,7 @@ export default function JoinRoomScreen() {
     >
       {/* Header */}
       <View className="flex-row items-center gap-3 px-5 pt-safe pb-4 border-b border-border bg-background">
-        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7}>
+        <TouchableOpacity onPress={() => router.canGoBack() ? router.back() : router.replace('/')} activeOpacity={0.7}>
           <Ionicons name="arrow-back" size={22} color="#6b7280" />
         </TouchableOpacity>
         <Text className="text-lg font-bold text-gray-800 dark:text-white flex-1">Join a Room</Text>
