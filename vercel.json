@@ -1,4 +1,5 @@
 {
+  "name": "ssc-task",
   "cleanUrls": true,
   "trailingSlash": false,
   "rewrites": [
