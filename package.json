@@ -1,6 +1,5 @@
 {
   "name": "ssc-tasks",
-  "homepage": "https://jazpherbeneza6-dot.github.io/SSC-TASK",
   "main": "expo-router/entry",
   "version": "1.0.0",
   "scripts": {
@@ -8,8 +7,6 @@
     "android": "expo start -c --android",
     "ios": "expo start -c --ios",
     "web": "expo start -c --web",
-    "predeploy": "npx expo export --platform web",
-    "deploy": "gh-pages -d dist",
     "clean": "rm -rf .expo node_modules"
   },
   "dependencies": {

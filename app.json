@@ -43,8 +43,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "edc6a98b-dea2-47b8-a367-dbcabe924f60"
+        "projectId": "80e312a5-befd-4c26-9627-ccb220646fac"
       }
-    }
+    },
+    "owner": "jazz2345"
   }
 }
