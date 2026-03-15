@@ -1,14 +1,18 @@
 import { Text } from '@/components/ui/text';
+import { Skeleton } from '@/components/ui/skeleton';
 import {
   ScrollView,
   View,
   TouchableOpacity,
   TextInput,
-  Alert,
+  Modal,
+  FlatList,
+  Linking,
   ActivityIndicator,
   Platform,
   KeyboardAvoidingView,
 } from 'react-native';
+import { Alert } from '@/utils/alerts';
 import { useAuth } from '@/hooks/useAuth';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';

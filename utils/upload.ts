@@ -80,3 +80,12 @@ export const uploadFile = async (uri: string, filename: string, mimeType: string
     throw error;
   }
 };
+
+/**
+ * Convenience wrapper for uploading images
+ */
+export const uploadImage = async (uri: string): Promise<{ url: string }> => {
+  const filename = uri.split('/').pop() || `image-${Date.now()}.jpg`;
+  const mimeType = 'image/jpeg';
+  return uploadFile(uri, filename, mimeType);
+};

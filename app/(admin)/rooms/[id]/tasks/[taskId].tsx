@@ -5,11 +5,11 @@ import {
   View,
   TouchableOpacity,
   TextInput,
-  Alert,
   Modal,
   FlatList,
   Linking,
 } from 'react-native';
+import { Alert } from '@/utils/alerts';
 import { useAuth } from '@/hooks/useAuth';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -627,14 +627,6 @@ export default function TaskDetailsScreen() {
                         </TouchableOpacity>
                       )}
 
-                      {/* Remove button */}
-                      <TouchableOpacity
-                        onPress={() => handleRemoveAttachment(idx)}
-                        activeOpacity={0.7}
-                        className="absolute top-2 right-2 w-7 h-7 bg-red-500 rounded-full items-center justify-center border-2 border-white shadow-sm"
-                      >
-                        <Ionicons name="trash" size={12} color="white" />
-                      </TouchableOpacity>
                     </View>
                   );
                 })}
@@ -879,13 +871,21 @@ export default function TaskDetailsScreen() {
                 task.status === 'completed' ? 'bg-green-500' : task.status === 'rejected' ? 'bg-red-500' : 'bg-amber-400'
               }`} />
               <Text className={`text-xs font-semibold ${
-                task.status === 'completed'
+                task.completed
                   ? 'text-green-600 dark:text-green-400'
+                  : task.status === 'pending'
+                  ? 'text-amber-600 dark:text-amber-400'
                   : task.status === 'rejected'
                   ? 'text-red-600 dark:text-red-400'
-                  : 'text-amber-600 dark:text-amber-400'
+                  : 'text-gray-600 dark:text-gray-400'
               }`}>
-                {task.status === 'completed' ? 'Completed' : task.status === 'pending' ? 'Pending Approval' : task.status === 'rejected' ? 'Rejected' : 'Pending'}
+                {task.completed
+                  ? 'Completed'
+                  : task.status === 'pending'
+                  ? 'Pending Approval'
+                  : task.status === 'rejected'
+                  ? 'Rejected'
+                  : 'To Do'}
               </Text>
             </View>
           </View>

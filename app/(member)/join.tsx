@@ -3,11 +3,12 @@ import {
   View,
   TouchableOpacity,
   TextInput,
-  Alert,
+  ScrollView,
   KeyboardAvoidingView,
   Platform,
-  ScrollView,
+  ActivityIndicator,
 } from 'react-native';
+import { Alert } from '@/utils/alerts';
 import { useAuth } from '@/hooks/useAuth';
 import { useRouter } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';

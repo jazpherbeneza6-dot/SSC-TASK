@@ -8,7 +8,8 @@ import {
 } from '@/components/ui/card';
 import { Text } from '@/components/ui/text';
 import React, { useState, useEffect } from 'react';
-import { View, Alert } from 'react-native';
+import { View } from 'react-native';
+import { Alert } from '@/utils/alerts';
 import { auth } from '@/FirebaseConfig';
 import { sendEmailVerification } from 'firebase/auth';
 import { useRouter } from 'expo-router';

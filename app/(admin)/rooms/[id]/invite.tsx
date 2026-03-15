@@ -4,11 +4,11 @@ import {
   View,
   TouchableOpacity,
   TextInput,
-  Alert,
   Share,
   FlatList,
   Modal,
 } from 'react-native';
+import { Alert } from '@/utils/alerts';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useState, useEffect, useMemo } from 'react';

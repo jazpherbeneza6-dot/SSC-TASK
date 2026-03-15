@@ -1,6 +1,16 @@
 import { Text } from '@/components/ui/text';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ScrollView, View, TouchableOpacity, Alert, ActivityIndicator, Modal, Linking } from 'react-native';
+import {
+  ScrollView,
+  View,
+  TouchableOpacity,
+  TextInput,
+  Modal,
+  FlatList,
+  Linking,
+  ActivityIndicator,
+} from 'react-native';
+import { Alert } from '@/utils/alerts';
 import { useAuth } from '@/hooks/useAuth';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -471,8 +481,11 @@ export default function MemberTaskDetailScreen() {
                 proof_url: newAttachments.length > 0 ? newAttachments[0] : null,
               };
 
-              // If no attachments left, and it was pending/rejected, maybe we should keep it that way
-              // but for now let's just update the list.
+              // If it was rejected, resetting it to pending upon modification
+              if (task.status === 'rejected') {
+                updates.status = 'pending';
+              }
+
               await updateDoc(doc(db, 'rooms', roomId, 'tasks', taskId), updates);
               setTask((prev: any) => ({ ...prev, ...updates }));
             } catch (e) {
@@ -964,13 +977,25 @@ export default function MemberTaskDetailScreen() {
                 task.status === 'completed' ? 'bg-green-500' : task.status === 'rejected' || isIncomplete ? 'bg-red-500' : 'bg-amber-400'
               }`} />
               <Text className={`text-xs font-semibold ${
-                task.status === 'completed'
+                task.completed
                   ? 'text-green-600 dark:text-green-400'
-                  : task.status === 'rejected' || isIncomplete
+                  : task.status === 'pending'
+                  ? 'text-amber-600 dark:text-amber-400'
+                  : task.status === 'rejected'
                   ? 'text-red-600 dark:text-red-400'
-                  : 'text-amber-600 dark:text-amber-400'
+                  : isIncomplete
+                  ? 'text-red-600 dark:text-red-400'
+                  : 'text-gray-600 dark:text-gray-400'
               }`}>
-                {task.status === 'completed' ? 'Completed' : task.status === 'pending' ? 'Pending Approval' : task.status === 'rejected' ? 'Rejected' : isIncomplete ? 'Incomplete' : 'Pending'}
+                {task.completed
+                  ? 'Completed'
+                  : task.status === 'pending'
+                  ? 'Pending Approval'
+                  : task.status === 'rejected'
+                  ? 'Rejected'
+                  : isIncomplete
+                  ? 'Incomplete'
+                  : 'To Do'}
               </Text>
             </View>
           </View>

@@ -1,6 +1,7 @@
 import { Text } from '@/components/ui/text';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ScrollView, View, TouchableOpacity, RefreshControl, TextInput, Modal, Alert } from 'react-native';
+import { ScrollView, View, TouchableOpacity, RefreshControl, TextInput, Modal } from 'react-native';
+import { Alert } from '@/utils/alerts';
 import { useAuth } from '@/hooks/useAuth';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';

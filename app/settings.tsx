@@ -5,9 +5,9 @@ import {
   View,
   TouchableOpacity,
   Switch,
-  Alert,
   ActivityIndicator,
 } from 'react-native';
+import { Alert } from '@/utils/alerts';
 import { getAuth, signOut } from 'firebase/auth';
 import { useAuth } from '@/hooks/useAuth';
 import { useRouter } from 'expo-router';

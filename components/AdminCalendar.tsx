@@ -1,5 +1,6 @@
 import { Text } from '@/components/ui/text';
-import { View, TouchableOpacity, Modal, TextInput, Alert, ScrollView } from 'react-native';
+import { View, TouchableOpacity, Modal, TextInput, ScrollView } from 'react-native';
+import { Alert } from '@/utils/alerts';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useState, useEffect } from 'react';
 import { collection, addDoc, getDocs, deleteDoc, updateDoc, doc, query, where, Timestamp } from 'firebase/firestore';
