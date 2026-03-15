@@ -15,6 +15,7 @@ import {
   orderBy,
   query,
   serverTimestamp,
+  onSnapshot,
 } from 'firebase/firestore';
 import { db } from '@/FirebaseConfig';
 import { AdminCalendar } from '@/components/AdminCalendar';
@@ -150,6 +151,18 @@ const TaskCard = ({
               <View className="flex-row items-center gap-1 bg-red-50 dark:bg-red-950/50 px-2 py-0.5 rounded-md">
                 <Ionicons name="alert-circle" size={10} color="#ef4444" />
                 <Text className="text-xs font-bold text-red-500">Incomplete</Text>
+              </View>
+            )}
+            {task.status === 'pending' && (
+              <View className="flex-row items-center gap-1 bg-amber-50 dark:bg-amber-950/50 px-2 py-0.5 rounded-md">
+                <Ionicons name="time" size={10} color="#f59e0b" />
+                <Text className="text-xs font-bold text-amber-600">Pending Approval</Text>
+              </View>
+            )}
+            {task.status === 'rejected' && (
+              <View className="flex-row items-center gap-1 bg-red-50 dark:bg-red-950/50 px-2 py-0.5 rounded-md">
+                <Ionicons name="close-circle" size={10} color="#ef4444" />
+                <Text className="text-xs font-bold text-red-500">Rejected</Text>
               </View>
             )}
           </View>
@@ -372,39 +385,61 @@ export default function MemberRoomScreen() {
 
   const todayKey = new Date().toISOString().split('T')[0];
 
-  const fetchData = useCallback(async () => {
+  useEffect(() => {
     if (!id) return;
-    try {
-      const roomSnap = await getDoc(doc(db, 'rooms', id));
-      if (roomSnap.exists()) setRoom({ id: roomSnap.id, ...roomSnap.data() });
 
-      const membersSnap = await getDocs(collection(db, 'rooms', id, 'members'));
-      setMembers(membersSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    // 1. Fetch static or less frequent data
+    const fetchStatic = async () => {
+      try {
+        const roomSnap = await getDoc(doc(db, 'rooms', id));
+        if (roomSnap.exists()) setRoom({ id: roomSnap.id, ...roomSnap.data() });
 
-      const tasksSnap = await getDocs(
-        query(collection(db, 'rooms', id, 'tasks'), orderBy('createdAt', 'desc'))
-      );
-      setTasks(tasksSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        const membersSnap = await getDocs(collection(db, 'rooms', id, 'members'));
+        setMembers(membersSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      } catch (e) {
+        console.error('Error fetching member room static data:', e);
+      }
+    };
+    fetchStatic();
 
-      const attendanceSnap = await getDocs(
-        collection(db, 'rooms', id, 'attendance', todayKey, 'records')
-      );
-      const attendanceMap: Record<string, AttendanceStatus> = {};
-      attendanceSnap.docs.forEach((d) => {
-        attendanceMap[d.id] = d.data().status ?? null;
-      });
-      setAttendance(attendanceMap);
-    } catch (e) {
-      console.error('Error fetching room data:', e);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
+    // 2. Listen to real-time tasks
+    const tasksUnsub = onSnapshot(
+      query(collection(db, 'rooms', id, 'tasks'), orderBy('createdAt', 'desc')),
+      (snap) => {
+        setTasks(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        setLoading(false);
+        setRefreshing(false);
+      },
+      (err) => {
+        console.error('Member tasks listener error:', err);
+        setLoading(false);
+      }
+    );
+
+    // 3. Listen to real-time attendance for today
+    const attendanceUnsub = onSnapshot(
+      collection(db, 'rooms', id, 'attendance', todayKey, 'records'),
+      (snap) => {
+        const attendanceMap: Record<string, AttendanceStatus> = {};
+        snap.docs.forEach((d) => {
+          attendanceMap[d.id] = d.data().status ?? null;
+        });
+        setAttendance(attendanceMap);
+      }
+    );
+
+    return () => {
+      tasksUnsub();
+      attendanceUnsub();
+    };
   }, [id, todayKey]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
-
-  const onRefresh = () => { setRefreshing(true); fetchData(); };
+  const onRefresh = () => {
+    // With onSnapshot, we don't strictly need a manual refresh,
+    // but we can set refreshing to true to show the indicator while we "wait" 
+    // for any potential updates, or just let it be.
+    setRefreshing(false); 
+  };
 
   const handleToggle = async (task: any) => {
     const next = !task.completed;
@@ -439,9 +474,20 @@ export default function MemberRoomScreen() {
 
   const myTasks      = tasks.filter((t) => t.assignees?.includes(user?.uid));
   const displayTasks = filterMine ? myTasks : tasks;
-  const allPending   = displayTasks.filter((t) => !t.completed);
-  const completed    = displayTasks.filter((t) =>  t.completed);
-  const myPending    = myTasks.filter((t) => !t.completed).length;
+  
+  const rejected     = displayTasks.filter((t) => t.status === 'rejected');
+  const reviewing    = displayTasks.filter((t) => t.status === 'pending');
+  const completed    = displayTasks.filter((t) => t.status === 'completed' || (t.completed && !t.status));
+  
+  const remaining    = displayTasks.filter((t) => 
+    t.status !== 'rejected' && 
+    t.status !== 'pending' && 
+    t.status !== 'completed' && 
+    !t.completed
+  );
+
+  const myPendingCount = myTasks.filter((t) => t.status !== 'completed' && !t.completed).length;
+  const myRejectedCount = myTasks.filter((t) => t.status === 'rejected').length;
 
   // Check if a task is overdue
   const isOverdue = (t: any) => {
@@ -453,9 +499,12 @@ export default function MemberRoomScreen() {
     return d.getTime() < now.getTime();
   };
 
-  const myIncomplete = myTasks.filter((t) => !t.completed && isOverdue(t)).length;
-  const incomplete   = allPending.filter((t) => isOverdue(t));
-  const pending      = allPending.filter((t) => !isOverdue(t));
+  const myIncompleteCount = myTasks.filter((t) => 
+    !t.completed && t.status !== 'completed' && t.status !== 'pending' && t.status !== 'rejected' && isOverdue(t)
+  ).length;
+  
+  const incomplete   = remaining.filter((t) => isOverdue(t));
+  const pending      = remaining.filter((t) => !isOverdue(t));
 
   if (loading || !room) {
     return (
@@ -483,16 +532,22 @@ export default function MemberRoomScreen() {
           <TouchableOpacity onPress={() => router.canGoBack() ? router.back() : router.replace('/')} activeOpacity={0.7}>
             <Ionicons name="arrow-back" size={24} color="white" />
           </TouchableOpacity>
-          {myIncomplete > 0 ? (
-            <View className="bg-red-500/80 rounded-full px-3 py-1">
+          {myRejectedCount > 0 ? (
+            <View className="bg-red-500 rounded-full px-3 py-1">
               <Text className="text-white text-xs font-bold">
-                {myIncomplete} incomplete
+                {myRejectedCount} rejected
               </Text>
             </View>
-          ) : myPending > 0 ? (
+          ) : myIncompleteCount > 0 ? (
+            <View className="bg-red-500/80 rounded-full px-3 py-1">
+              <Text className="text-white text-xs font-bold">
+                {myIncompleteCount} incomplete
+              </Text>
+            </View>
+          ) : myPendingCount > 0 ? (
             <View className="bg-white/20 rounded-full px-3 py-1">
               <Text className="text-white text-xs font-bold">
-                {myPending} pending for you
+                {myPendingCount} tasks for you
               </Text>
             </View>
           ) : null}
@@ -602,8 +657,48 @@ export default function MemberRoomScreen() {
               </View>
             ) : (
               <>
+                {rejected.length > 0 && (
+                  <View className="mb-4">
+                    <View className="flex-row items-center gap-2 mb-2">
+                      <Ionicons name="close-circle" size={14} color="#ef4444" />
+                      <Text className="text-xs font-bold text-red-500 uppercase tracking-wider">
+                        Rejected · {rejected.length}
+                      </Text>
+                    </View>
+                    {rejected.map((task) => (
+                      <TaskCard
+                        key={task.id}
+                        task={task}
+                        isAssignedToMe={task.assignees?.includes(user?.uid)}
+                        onToggle={handleToggle}
+                        onPress={(t) => router.push(`/(member)/rooms/${id}/tasks/${t.id}` as any)}
+                      />
+                    ))}
+                  </View>
+                )}
+
+                {reviewing.length > 0 && (
+                  <View className="mb-4">
+                    <View className="flex-row items-center gap-2 mb-2">
+                      <Ionicons name="time" size={14} color="#f59e0b" />
+                      <Text className="text-xs font-bold text-amber-500 uppercase tracking-wider">
+                        Awaiting Review · {reviewing.length}
+                      </Text>
+                    </View>
+                    {reviewing.map((task) => (
+                      <TaskCard
+                        key={task.id}
+                        task={task}
+                        isAssignedToMe={task.assignees?.includes(user?.uid)}
+                        onToggle={handleToggle}
+                        onPress={(t) => router.push(`/(member)/rooms/${id}/tasks/${t.id}` as any)}
+                      />
+                    ))}
+                  </View>
+                )}
+
                 {incomplete.length > 0 && (
-                  <View className="mb-3">
+                  <View className="mb-4">
                     <Text className="text-xs font-bold text-red-500 uppercase tracking-wider mb-2">
                       Incomplete · {incomplete.length}
                     </Text>
@@ -618,10 +713,11 @@ export default function MemberRoomScreen() {
                     ))}
                   </View>
                 )}
+
                 {pending.length > 0 && (
-                  <View className="mb-3">
+                  <View className="mb-4">
                     <Text className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">
-                      Pending · {pending.length}
+                      Tasks to do · {pending.length}
                     </Text>
                     {pending.map((task) => (
                       <TaskCard

@@ -11,10 +11,11 @@ import {
   doc,
   getDoc,
   updateDoc,
-  setDoc,
-  addDoc,
-  orderBy,
   query,
+  orderBy,
+  onSnapshot,
+  addDoc,
+  setDoc,
   serverTimestamp,
 } from 'firebase/firestore';
 import { db } from '@/FirebaseConfig';
@@ -154,6 +155,18 @@ const GridTaskCard = ({
             <View className="flex-row items-center gap-1 bg-red-50 dark:bg-red-950/50 px-1.5 py-0.5 rounded-md">
               <Ionicons name="alert-circle" size={9} color="#ef4444" />
               <Text className="text-[10px] text-red-500 font-bold">Incomplete</Text>
+            </View>
+          )}
+          {task.status === 'pending' && (
+            <View className="flex-row items-center gap-1 bg-amber-50 dark:bg-amber-950/50 px-1.5 py-0.5 rounded-md">
+              <Ionicons name="time" size={9} color="#f59e0b" />
+              <Text className="text-[10px] text-amber-600 dark:text-amber-400 font-bold">Review</Text>
+            </View>
+          )}
+          {task.status === 'rejected' && (
+            <View className="flex-row items-center gap-1 bg-red-50 dark:bg-red-950/50 px-1.5 py-0.5 rounded-md">
+              <Ionicons name="close-circle" size={9} color="#ef4444" />
+              <Text className="text-[10px] text-red-500 font-bold">Rejected</Text>
             </View>
           )}
           {task.completed && (
@@ -653,37 +666,54 @@ export default function AdminRoomDetailScreen() {
 
   const todayKey = new Date().toISOString().split('T')[0];
 
-  const fetchData = useCallback(async () => {
+  useEffect(() => {
     if (!id) return;
-    try {
-      const roomSnap = await getDoc(doc(db, 'rooms', id));
-      if (roomSnap.exists()) setRoom({ id: roomSnap.id, ...roomSnap.data() });
 
-      const membersSnap = await getDocs(collection(db, 'rooms', id, 'members'));
-      setMembers(membersSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    // 1. Fetch static data
+    const fetchStatic = async () => {
+      try {
+        const roomSnap = await getDoc(doc(db, 'rooms', id));
+        if (roomSnap.exists()) setRoom({ id: roomSnap.id, ...roomSnap.data() });
 
-      const tasksSnap = await getDocs(
-        query(collection(db, 'rooms', id, 'tasks'), orderBy('createdAt', 'desc'))
-      );
-      setTasks(tasksSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        const membersSnap = await getDocs(collection(db, 'rooms', id, 'members'));
+        setMembers(membersSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      } catch (e) {
+        console.error('Error fetching admin room static data:', e);
+      }
+    };
+    fetchStatic();
 
-      const attendanceSnap = await getDocs(
-        collection(db, 'rooms', id, 'attendance', todayKey, 'records')
-      );
-      const map: Record<string, AttendanceStatus> = {};
-      attendanceSnap.docs.forEach((d) => { map[d.id] = d.data().status ?? null; });
-      setAttendance(map);
-    } catch (e) {
-      console.error('Error fetching room data:', e);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
+    // 2. Listen to real-time tasks
+    const tasksUnsub = onSnapshot(
+      query(collection(db, 'rooms', id, 'tasks'), orderBy('createdAt', 'desc')),
+      (snap) => {
+        setTasks(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        setLoading(false);
+        setRefreshing(false);
+      },
+      (err) => {
+        console.error('Admin tasks listener error:', err);
+        setLoading(false);
+      }
+    );
+
+    // 3. Listen to real-time attendance for today
+    const attendanceUnsub = onSnapshot(
+      collection(db, 'rooms', id, 'attendance', todayKey, 'records'),
+      (snap) => {
+        const map: Record<string, AttendanceStatus> = {};
+        snap.docs.forEach((d) => { map[d.id] = d.data().status ?? null; });
+        setAttendance(map);
+      }
+    );
+
+    return () => {
+      tasksUnsub();
+      attendanceUnsub();
+    };
   }, [id, todayKey]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
-
-  const onRefresh = () => { setRefreshing(true); fetchData(); };
+  const onRefresh = () => { setRefreshing(false); };
 
   // Admin cannot toggle tasks — removed handleToggle entirely
 
@@ -704,7 +734,6 @@ export default function AdminRoomDetailScreen() {
       setTaskTitle('');
       setTaskDescription('');
       setTaskPriority('medium');
-      fetchData();
     } catch (e) {
       Alert.alert('Error', 'Could not create task.');
     } finally {
@@ -755,7 +784,6 @@ export default function AdminRoomDetailScreen() {
                 })
               );
             } catch (e) {
-              fetchData();
               Alert.alert('Error', 'Could not update all attendance records.');
             }
           },

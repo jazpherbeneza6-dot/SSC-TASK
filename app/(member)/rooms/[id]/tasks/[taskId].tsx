@@ -11,6 +11,7 @@ import {
   updateDoc,
   collection,
   getDocs,
+  onSnapshot,
 } from 'firebase/firestore';
 import { db } from '@/FirebaseConfig';
 import * as ImagePicker from 'expo-image-picker';
@@ -100,6 +101,7 @@ type PickedFile = {
   type: 'image' | 'video';
   name: string;
   mimeType: string;
+  fileSize?: number;
 };
 
 type ProofModalProps = {
@@ -129,6 +131,7 @@ const ProofModal = ({ visible, onClose, onSubmit, uploading }: ProofModalProps) 
         type: asset.type === 'video' ? 'video' : 'image',
         name: asset.fileName || `${asset.type || 'file'}-${Date.now()}.${asset.uri.split('.').pop()}`,
         mimeType: asset.mimeType || (asset.type === 'video' ? 'video/mp4' : 'image/jpeg'),
+        fileSize: asset.fileSize,
       }));
       setPickedFiles(prev => [...prev, ...newFiles]);
     }
@@ -146,15 +149,14 @@ const ProofModal = ({ visible, onClose, onSubmit, uploading }: ProofModalProps) 
     });
     if (!result.canceled && result.assets[0]) {
       const asset = result.assets[0];
-      const uri = asset.uri;
-      const ext = uri.split('.').pop()?.toLowerCase() || 'jpg';
-      
-      setPickedFiles(prev => [...prev, {
+      const newFile: PickedFile = {
         uri: asset.uri,
-        type: asset.type === 'video' || ['mp4', 'mov', 'm4v'].includes(ext) ? 'video' : 'image',
-        name: asset.fileName || `capture-${Date.now()}.${ext}`,
+        type: asset.type === 'video' ? 'video' : 'image',
+        name: asset.fileName || `${asset.type || 'file'}-${Date.now()}.${asset.uri.split('.').pop()}`,
         mimeType: asset.mimeType || (asset.type === 'video' ? 'video/mp4' : 'image/jpeg'),
-      }]);
+        fileSize: asset.fileSize,
+      };
+      setPickedFiles(prev => [...prev, newFile]);
     }
   };
 
@@ -332,25 +334,38 @@ export default function MemberTaskDetailScreen() {
 
   useEffect(() => {
     if (!roomId || !taskId) return;
-    fetchData();
+
+    // Fetch static data once
+    const fetchStatic = async () => {
+      try {
+        const roomSnap = await getDoc(doc(db, 'rooms', roomId));
+        if (roomSnap.exists()) setRoomName(roomSnap.data().name || '');
+
+        const membersSnap = await getDocs(collection(db, 'rooms', roomId, 'members'));
+        setMembers(membersSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      } catch (e) {
+        console.error('Error fetching static task data:', e);
+      }
+    };
+    fetchStatic();
+
+    // Listen to real-time task changes
+    const unsubscribe = onSnapshot(
+      doc(db, 'rooms', roomId, 'tasks', taskId),
+      (docSnap) => {
+        if (docSnap.exists()) {
+          setTask({ id: docSnap.id, ...docSnap.data() });
+        }
+        setLoading(false);
+      },
+      (err) => {
+        console.error('Task listener error:', err);
+        setLoading(false);
+      }
+    );
+
+    return () => unsubscribe();
   }, [roomId, taskId]);
-
-  const fetchData = async () => {
-    setLoading(true);
-    try {
-      const roomSnap = await getDoc(doc(db, 'rooms', roomId));
-      if (roomSnap.exists()) setRoomName(roomSnap.data().name || '');
-
-      const taskSnap = await getDoc(doc(db, 'rooms', roomId, 'tasks', taskId));
-      if (taskSnap.exists()) setTask({ id: taskSnap.id, ...taskSnap.data() });
-
-      const membersSnap = await getDocs(collection(db, 'rooms', roomId, 'members'));
-      setMembers(membersSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    } catch (e) {
-      console.error('Error fetching task:', e);
-    }
-    setLoading(false);
-  };
 
   const isAssignedToMe = task?.assignees?.includes(user?.uid);
 
@@ -384,25 +399,26 @@ export default function MemberTaskDetailScreen() {
       const attachmentUrls: string[] = [];
       
       for (const file of files) {
-        if (file.type === 'video') {
-          // Videos go to Cloudinary
+        if (file.type === 'video' || (file.fileSize && file.fileSize > 1000000)) {
+          // Videos or large images (>1MB) go to Cloudinary
           const uploadData = await uploadFile(file.uri, file.name, file.mimeType);
-          if (uploadData?.url) {
-            attachmentUrls.push(uploadData.url);
-          }
+          if (uploadData?.url) attachmentUrls.push(uploadData.url);
         } else {
-          // Images go to Firestore as Base64 (Data URL)
-          const base64 = await toBase64(file.uri);
-          
-          // Safety check: Firestore document limit is ~1MB
-          // Base64 strings are ~33% larger than binary.
-          // We check if the base64 string is suspiciously large
-          if (base64.length > 800000) { // ~800KB limit for safety
-             Alert.alert('Image too large', `The image "${file.name}" is too large for database storage. Please use a smaller photo.`);
-             setUploadingProof(false);
-             return;
+          // Small images: Try Base64 first (usually faster for small files)
+          try {
+            const base64 = await toBase64(file.uri);
+            if (base64.length < 1300000) { // ~1MB limit for Base64 safety
+              attachmentUrls.push(base64);
+            } else {
+              // Fallback to Cloudinary if Base64 ends up too large
+              const uploadData = await uploadFile(file.uri, file.name, file.mimeType);
+              if (uploadData?.url) attachmentUrls.push(uploadData.url);
+            }
+          } catch (e) {
+            // If Base64 conversion fails (e.g. memory), fallback to Cloudinary
+            const uploadData = await uploadFile(file.uri, file.name, file.mimeType);
+            if (uploadData?.url) attachmentUrls.push(uploadData.url);
           }
-          attachmentUrls.push(base64);
         }
       }
 
@@ -411,11 +427,15 @@ export default function MemberTaskDetailScreen() {
         return;
       }
 
+      const existingAttachments = task?.proof_attachments || [];
+      const updatedAttachments = [...existingAttachments, ...attachmentUrls];
+
       const now = new Date().toISOString();
       const updates = {
-        completed: true,
-        proof_attachments: attachmentUrls,
-        proof_url: attachmentUrls[0], // Keep first for backward compatibility
+        status: 'pending' as const,
+        completed: false,
+        proof_attachments: updatedAttachments,
+        proof_url: updatedAttachments[0], // Keep the first one as primary
         proof_submitted_at: now,
         proof_submitted_by: user?.uid ?? null,
       };
@@ -430,6 +450,38 @@ export default function MemberTaskDetailScreen() {
     } finally {
       setUploadingProof(false);
     }
+  };
+
+  const handleRemoveAttachment = async (index: number) => {
+    const attachmentToRemove = task.proof_attachments[index];
+    const newAttachments = task.proof_attachments.filter((_: any, i: number) => i !== index);
+    
+    Alert.alert(
+      'Remove Attachment?',
+      'Are you sure you want to remove this proof?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Remove', 
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const updates: any = {
+                proof_attachments: newAttachments,
+                proof_url: newAttachments.length > 0 ? newAttachments[0] : null,
+              };
+
+              // If no attachments left, and it was pending/rejected, maybe we should keep it that way
+              // but for now let's just update the list.
+              await updateDoc(doc(db, 'rooms', roomId, 'tasks', taskId), updates);
+              setTask((prev: any) => ({ ...prev, ...updates }));
+            } catch (e) {
+              Alert.alert('Error', 'Could not remove attachment.');
+            }
+          }
+        }
+      ]
+    );
   };
 
   // ── Reopen task — clear proof fields ─────────────────────────────────────
@@ -553,11 +605,15 @@ export default function MemberTaskDetailScreen() {
 
         {/* Status banner */}
         <TouchableOpacity
-          onPress={isAssignedToMe && !isIncomplete ? handleMarkComplete : undefined}
-          activeOpacity={isAssignedToMe && !isIncomplete ? 0.75 : 1}
+          onPress={isAssignedToMe && !isIncomplete && !task.completed && task.status !== 'pending' ? handleMarkComplete : undefined}
+          activeOpacity={isAssignedToMe && !isIncomplete && !task.completed && task.status !== 'pending' ? 0.75 : 1}
           className={`flex-row items-center gap-3 rounded-2xl p-4 border ${
-            task.completed
+            task.status === 'completed'
               ? 'bg-green-50 dark:bg-green-950/40 border-green-200 dark:border-green-900'
+              : task.status === 'pending'
+              ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-900'
+              : task.status === 'rejected'
+              ? 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900'
               : isIncomplete
               ? 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900'
               : isAssignedToMe
@@ -567,8 +623,12 @@ export default function MemberTaskDetailScreen() {
         >
           <View
             className={`w-7 h-7 rounded-full border-2 items-center justify-center ${
-              task.completed
+              task.status === 'completed'
                 ? 'bg-green-500 border-green-500'
+                : task.status === 'pending'
+                ? 'bg-amber-500 border-amber-500'
+                : task.status === 'rejected'
+                ? 'bg-red-500 border-red-500'
                 : isIncomplete
                 ? 'bg-red-500 border-red-500'
                 : isAssignedToMe
@@ -576,15 +636,20 @@ export default function MemberTaskDetailScreen() {
                 : 'border-gray-300 dark:border-gray-600'
             }`}
           >
-            {task.completed && <Ionicons name="checkmark" size={14} color="white" />}
-            {isIncomplete && !task.completed && <Ionicons name="alert" size={14} color="white" />}
+            {task.status === 'completed' && <Ionicons name="checkmark" size={14} color="white" />}
+            {task.status === 'pending' && <Ionicons name="time" size={14} color="white" />}
+            {(task.status === 'rejected' || (!task.status && isIncomplete)) && <Ionicons name="alert" size={14} color="white" />}
           </View>
 
           <View className="flex-1">
             <Text
               className={`text-sm font-bold ${
-                task.completed
+                task.status === 'completed'
                   ? 'text-green-700 dark:text-green-400'
+                  : task.status === 'pending'
+                  ? 'text-amber-600 dark:text-amber-400'
+                  : task.status === 'rejected'
+                  ? 'text-red-600 dark:text-red-400'
                   : isIncomplete
                   ? 'text-red-600 dark:text-red-400'
                   : isAssignedToMe
@@ -594,6 +659,10 @@ export default function MemberTaskDetailScreen() {
             >
               {task.completed
                 ? 'Completed'
+                : task.status === 'pending'
+                ? 'Pending Approval'
+                : task.status === 'rejected'
+                ? 'Task Rejected'
                 : isIncomplete
                 ? 'Incomplete'
                 : isAssignedToMe
@@ -603,6 +672,10 @@ export default function MemberTaskDetailScreen() {
             <Text className="text-xs text-gray-400 mt-0.5">
               {task.completed
                 ? isAssignedToMe ? 'Tap to reopen' : 'This task is done'
+                : task.status === 'pending'
+                ? 'Awaiting admin review'
+                : task.status === 'rejected'
+                ? 'Please review feedback and re-submit proof'
                 : isIncomplete
                 ? 'This task is past its due date'
                 : isAssignedToMe
@@ -613,19 +686,19 @@ export default function MemberTaskDetailScreen() {
 
           {isAssignedToMe && (
             <Ionicons
-              name={task.completed ? 'checkmark-circle' : isIncomplete ? 'alert-circle' : 'ellipse-outline'}
+              name={task.completed ? 'checkmark-circle' : task.status === 'pending' ? 'time' : (task.status === 'rejected' || isIncomplete) ? 'alert-circle' : 'ellipse-outline'}
               size={22}
-              color={task.completed ? '#22c55e' : isIncomplete ? '#ef4444' : '#6366f1'}
+              color={task.completed ? '#22c55e' : task.status === 'pending' ? '#f59e0b' : (task.status === 'rejected' || isIncomplete) ? '#ef4444' : '#6366f1'}
             />
           )}
         </TouchableOpacity>
 
         {/* "Assigned to me" callout */}
-        {isAssignedToMe && !task.completed && (
+        {isAssignedToMe && !task.completed && task.status !== 'pending' && (
           <View className="flex-row items-center gap-2 bg-primary/10 rounded-xl px-3 py-2.5">
             <Ionicons name="camera-outline" size={15} color="#6366f1" />
             <Text className="text-xs font-semibold text-primary flex-1">
-              Upload a photo proof to mark this task as complete.
+              {task.status === 'rejected' ? 'Re-submit proof to try again.' : 'Upload a photo proof to mark this task as complete.'}
             </Text>
           </View>
         )}
@@ -712,6 +785,17 @@ export default function MemberTaskDetailScreen() {
                           <View className="absolute bottom-2 right-2 bg-black/50 rounded-lg px-2 py-1">
                             <Ionicons name="expand-outline" size={10} color="white" />
                           </View>
+                        </TouchableOpacity>
+                      )}
+
+                      {/* Remove button */}
+                      {isAssignedToMe && !task.completed && (
+                        <TouchableOpacity
+                          onPress={() => handleRemoveAttachment(idx)}
+                          activeOpacity={0.7}
+                          className="absolute top-2 right-2 w-7 h-7 bg-red-500 rounded-full items-center justify-center border-2 border-white shadow-sm"
+                        >
+                          <Ionicons name="trash" size={12} color="white" />
                         </TouchableOpacity>
                       )}
                     </View>
@@ -866,23 +950,27 @@ export default function MemberTaskDetailScreen() {
           <View className="flex-row justify-between items-center py-1 border-b border-border">
             <Text className="text-xs text-gray-400">Status</Text>
             <View className={`flex-row items-center gap-1.5 px-2 py-0.5 rounded-md ${
-              task.completed
+              task.status === 'completed'
                 ? 'bg-green-50 dark:bg-green-950/50'
+                : task.status === 'pending'
+                ? 'bg-amber-50 dark:bg-amber-950/50'
+                : task.status === 'rejected'
+                ? 'bg-red-50 dark:bg-red-950/50'
                 : isIncomplete
                 ? 'bg-red-50 dark:bg-red-950/50'
                 : 'bg-amber-50 dark:bg-amber-950/50'
             }`}>
               <View className={`w-1.5 h-1.5 rounded-full ${
-                task.completed ? 'bg-green-500' : isIncomplete ? 'bg-red-500' : 'bg-amber-400'
+                task.status === 'completed' ? 'bg-green-500' : task.status === 'rejected' || isIncomplete ? 'bg-red-500' : 'bg-amber-400'
               }`} />
               <Text className={`text-xs font-semibold ${
-                task.completed
+                task.status === 'completed'
                   ? 'text-green-600 dark:text-green-400'
-                  : isIncomplete
+                  : task.status === 'rejected' || isIncomplete
                   ? 'text-red-600 dark:text-red-400'
                   : 'text-amber-600 dark:text-amber-400'
               }`}>
-                {task.completed ? 'Completed' : isIncomplete ? 'Incomplete' : 'Pending'}
+                {task.status === 'completed' ? 'Completed' : task.status === 'pending' ? 'Pending Approval' : task.status === 'rejected' ? 'Rejected' : isIncomplete ? 'Incomplete' : 'Pending'}
               </Text>
             </View>
           </View>

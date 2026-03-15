@@ -22,6 +22,7 @@ import {
   collection,
   getDocs,
   serverTimestamp,
+  onSnapshot,
 } from 'firebase/firestore';
 import { db } from '@/FirebaseConfig';
 import { Image } from 'expo-image';
@@ -46,6 +47,7 @@ type Task = {
   proof_attachments?: string[];
   proof_submitted_at: string | null;
   proof_submitted_by: string | null;
+  status?: 'pending' | 'completed' | 'rejected';
 };
 
 type Member = {
@@ -176,30 +178,42 @@ export default function TaskDetailsScreen() {
 
   useEffect(() => {
     if (!id || !taskId) return;
-    fetchData();
-  }, [id, taskId]);
 
-  const fetchData = async () => {
-    setLoading(true);
-    try {
-      const taskSnap = await getDoc(doc(db, 'rooms', id, 'tasks', taskId));
-      if (taskSnap.exists()) {
-        const data = { id: taskSnap.id, ...taskSnap.data() } as Task;
-        setTask(data);
-        setEditTitle(data.title);
-        setEditDescription(data.description || '');
-        setEditPriority(data.priority || 'medium');
-        setEditDueDate(data.dueDate || '');
-        setSelectedAssignees(data.assignees || []);
+    // Fetch static data (members)
+    const fetchStatic = async () => {
+      try {
+        const membersSnap = await getDocs(collection(db, 'rooms', id, 'members'));
+        setMembers(membersSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Member)));
+      } catch (e) {
+        console.error('Error fetching admin task static data:', e);
       }
+    };
+    fetchStatic();
 
-      const membersSnap = await getDocs(collection(db, 'rooms', id, 'members'));
-      setMembers(membersSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Member)));
-    } catch (e) {
-      console.error('Error fetching task:', e);
-    }
-    setLoading(false);
-  };
+    // Listen to real-time task changes
+    const unsubscribe = onSnapshot(
+      doc(db, 'rooms', id, 'tasks', taskId),
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const data = { id: docSnap.id, ...docSnap.data() } as Task;
+          setTask(data);
+          // Only set initial edit values if not already editing to avoid overwriting user input
+          setEditTitle(prev => prev || data.title);
+          setEditDescription(prev => prev || data.description || '');
+          setEditPriority(prev => prev || data.priority || 'medium');
+          setEditDueDate(prev => prev || data.dueDate || '');
+          setSelectedAssignees(prev => prev.length > 0 ? prev : (data.assignees || []));
+        }
+        setLoading(false);
+      },
+      (err) => {
+        console.error('Admin task listener error:', err);
+        setLoading(false);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [id, taskId]);
 
   // ── Toggle complete ───────────────────────────────────────────────────────
 
@@ -251,6 +265,72 @@ export default function TaskDetailsScreen() {
     } catch (e) {
       Alert.alert('Error', 'Failed to delete task.');
     }
+  };
+
+  // ── Approval Logic ─────────────────────────────────────────────────────────
+  const handleAccept = async () => {
+    if (!task) return;
+    setSaving(true);
+    try {
+      const updates = {
+        status: 'completed' as const,
+        completed: true,
+        updatedAt: serverTimestamp(),
+      };
+      await updateDoc(doc(db, 'rooms', id, 'tasks', taskId), updates);
+      setTask((prev) => prev ? { ...prev, ...updates } : prev);
+      Alert.alert('Success', 'Task accepted and marked as completed.');
+    } catch (e) {
+      Alert.alert('Error', 'Failed to accept task.');
+    }
+    setSaving(false);
+  };
+
+  const handleReject = async () => {
+    if (!task) return;
+    setSaving(true);
+    try {
+      const updates = {
+        status: 'rejected' as const,
+        completed: false,
+        updatedAt: serverTimestamp(),
+      };
+      await updateDoc(doc(db, 'rooms', id, 'tasks', taskId), updates);
+      setTask((prev) => prev ? { ...prev, ...updates } : prev);
+      Alert.alert('Task Rejected', 'The member will be notified to re-submit proof.');
+    } catch (e) {
+      Alert.alert('Error', 'Failed to reject task.');
+    }
+    setSaving(false);
+  };
+
+  const handleRemoveAttachment = async (index: number) => {
+    if (!task) return;
+    const newAttachments = (task.proof_attachments || []).filter((_: any, i: number) => i !== index);
+    
+    Alert.alert(
+      'Remove Attachment?',
+      'Are you sure you want to remove this proof?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Remove', 
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const updates: any = {
+                proof_attachments: newAttachments,
+                proof_url: newAttachments.length > 0 ? newAttachments[0] : null,
+              };
+              await updateDoc(doc(db, 'rooms', id, 'tasks', taskId), updates);
+              setTask((prev) => prev ? ({ ...prev, ...updates }) : prev);
+            } catch (e) {
+              Alert.alert('Error', 'Could not remove attachment.');
+            }
+          }
+        }
+      ]
+    );
   };
 
   // ── Assignee helpers ──────────────────────────────────────────────────────
@@ -367,6 +447,71 @@ export default function TaskDetailsScreen() {
         keyboardShouldPersistTaps="handled"
       >
 
+        {/* Status banner (Admin) */}
+        <View
+          className={`flex-row items-center gap-3 rounded-2xl p-4 border ${
+            task.status === 'completed'
+              ? 'bg-green-50 dark:bg-green-950/40 border-green-200 dark:border-green-900'
+              : task.status === 'pending'
+              ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-900'
+              : task.status === 'rejected'
+              ? 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900'
+              : 'bg-card border-border'
+          }`}
+        >
+          <View
+            className={`w-7 h-7 rounded-full border-2 items-center justify-center ${
+              task.status === 'completed'
+                ? 'bg-green-500 border-green-500'
+                : task.status === 'pending'
+                ? 'bg-amber-500 border-amber-500'
+                : task.status === 'rejected'
+                ? 'bg-red-500 border-red-500'
+                : 'border-gray-300 dark:border-gray-600'
+            }`}
+          >
+            {task.status === 'completed' && <Ionicons name="checkmark" size={14} color="white" />}
+            {task.status === 'pending' && <Ionicons name="time" size={14} color="white" />}
+            {task.status === 'rejected' && <Ionicons name="close" size={14} color="white" />}
+            {!task.status && <View className="w-2 h-2 rounded-full bg-gray-400" />}
+          </View>
+
+          <View className="flex-1">
+            <Text
+              className={`text-sm font-bold ${
+                task.status === 'completed'
+                  ? 'text-green-700 dark:text-green-400'
+                  : task.status === 'pending'
+                  ? 'text-amber-600 dark:text-amber-400'
+                  : task.status === 'rejected'
+                  ? 'text-red-700 dark:text-red-400'
+                  : 'text-gray-700 dark:text-gray-300'
+              }`}
+            >
+              {task.completed
+                ? 'Completed'
+                : task.status === 'pending'
+                ? 'Pending Approval'
+                : task.status === 'rejected'
+                ? 'Rejected'
+                : 'Status: Pending'}
+            </Text>
+            <Text className="text-xs text-gray-400 mt-0.5">
+              {task.completed
+                ? 'Task is approved and done'
+                : task.status === 'pending'
+                ? 'Needs your review'
+                : task.status === 'rejected'
+                ? 'Waiting for re-submission'
+                : 'Waiting for member to submit'}
+            </Text>
+          </View>
+
+          {task.status === 'pending' && (
+             <Ionicons name="eye-outline" size={20} color="#f59e0b" />
+          )}
+        </View>
+
         {/* ── Task card ───────────────────────────────────────────────── */}
         <View className="bg-card border border-border rounded-2xl p-4 gap-3">
           <SectionLabel>Task</SectionLabel>
@@ -481,6 +626,15 @@ export default function TaskDetailsScreen() {
                           </View>
                         </TouchableOpacity>
                       )}
+
+                      {/* Remove button */}
+                      <TouchableOpacity
+                        onPress={() => handleRemoveAttachment(idx)}
+                        activeOpacity={0.7}
+                        className="absolute top-2 right-2 w-7 h-7 bg-red-500 rounded-full items-center justify-center border-2 border-white shadow-sm"
+                      >
+                        <Ionicons name="trash" size={12} color="white" />
+                      </TouchableOpacity>
                     </View>
                   );
                 })}
@@ -559,6 +713,35 @@ export default function TaskDetailsScreen() {
             </View>
           )}
         </View>
+
+        {/* ── Approval Actions ───────────────────────────────────────── */}
+        {task.status === 'pending' && !editing && (
+          <View className="bg-card border border-amber-200 dark:border-amber-900 rounded-2xl p-4 gap-3 bg-amber-50/20 dark:bg-amber-950/10 mb-4">
+            <Text className="text-xs font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider">
+              Review Submission
+            </Text>
+            <View className="flex-row gap-3">
+              <TouchableOpacity
+                onPress={handleReject}
+                disabled={saving}
+                activeOpacity={0.8}
+                className="flex-1 bg-red-500 py-4 rounded-xl items-center justify-center flex-row gap-2"
+              >
+                <Ionicons name="close-circle-outline" size={18} color="white" />
+                <Text className="text-white font-bold text-sm">Reject</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleAccept}
+                disabled={saving}
+                activeOpacity={0.8}
+                className="flex-2 bg-green-500 py-4 rounded-xl items-center justify-center flex-row gap-2 px-8"
+              >
+                <Ionicons name="checkmark-circle-outline" size={18} color="white" />
+                <Text className="text-white font-bold text-sm">Accept Proof</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
 
         {/* ── Details card ────────────────────────────────────────────── */}
         <View className="bg-card border border-border rounded-2xl px-4">
@@ -684,11 +867,25 @@ export default function TaskDetailsScreen() {
           <View className="flex-row justify-between items-center py-1 border-t border-border">
             <Text className="text-xs text-gray-400">Status</Text>
             <View className={`flex-row items-center gap-1.5 px-2 py-0.5 rounded-md ${
-              task.completed ? 'bg-green-50 dark:bg-green-950/50' : 'bg-amber-50 dark:bg-amber-950/50'
+              task.status === 'completed'
+                ? 'bg-green-50 dark:bg-green-950/50'
+                : task.status === 'pending'
+                ? 'bg-amber-50 dark:bg-amber-950/50'
+                : task.status === 'rejected'
+                ? 'bg-red-50 dark:bg-red-950/50'
+                : 'bg-amber-50 dark:bg-amber-950/50'
             }`}>
-              <View className={`w-1.5 h-1.5 rounded-full ${task.completed ? 'bg-green-500' : 'bg-amber-400'}`} />
-              <Text className={`text-xs font-semibold ${task.completed ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}`}>
-                {task.completed ? 'Completed' : 'Pending'}
+              <View className={`w-1.5 h-1.5 rounded-full ${
+                task.status === 'completed' ? 'bg-green-500' : task.status === 'rejected' ? 'bg-red-500' : 'bg-amber-400'
+              }`} />
+              <Text className={`text-xs font-semibold ${
+                task.status === 'completed'
+                  ? 'text-green-600 dark:text-green-400'
+                  : task.status === 'rejected'
+                  ? 'text-red-600 dark:text-red-400'
+                  : 'text-amber-600 dark:text-amber-400'
+              }`}>
+                {task.status === 'completed' ? 'Completed' : task.status === 'pending' ? 'Pending Approval' : task.status === 'rejected' ? 'Rejected' : 'Pending'}
               </Text>
             </View>
           </View>
