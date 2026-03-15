@@ -1,6 +1,8 @@
+import { Platform } from 'react-native';
+
 // Cloudinary Configuration
 const CLOUD_NAME = 'dinpseh3h';
-const UPLOAD_PRESET = 'Videos'; // Corrected from "VIdeos" based on screenshot
+const UPLOAD_PRESET = 'Videos'; 
 
 /**
  * Standardizes URI for React Native FormData
@@ -11,16 +13,28 @@ const normalizeUri = (uri: string) => {
 
 export const uploadFile = async (uri: string, filename: string, mimeType: string): Promise<{ url: string }> => {
   try {
-    console.log('Starting Cloudinary upload:', { filename, mimeType });
+    console.log('Starting Cloudinary upload:', { filename, mimeType, platform: Platform.OS });
     
     // In React Native, FormData works best with the { uri, name, type } object pattern
+    // However, on Web, we need to send an actual File or Blob.
     const formData = new FormData();
-    formData.append('file', {
-      uri: normalizeUri(uri),
-      name: filename,
-      type: mimeType,
-    } as any);
     
+    let fileToUpload: any;
+
+    if (Platform.OS === 'web') {
+      // On Web, fetching the URI and converting to Blob is the most reliable way
+      const response = await fetch(uri);
+      fileToUpload = await response.blob();
+    } else {
+      // On Native, use the standard RN object pattern
+      fileToUpload = {
+        uri: normalizeUri(uri),
+        name: filename,
+        type: mimeType,
+      };
+    }
+
+    formData.append('file', fileToUpload);
     formData.append('upload_preset', UPLOAD_PRESET);
     formData.append('cloud_name', CLOUD_NAME);
 
