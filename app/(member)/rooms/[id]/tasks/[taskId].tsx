@@ -365,6 +365,18 @@ export default function MemberTaskDetailScreen() {
     setProofModalVisible(true);
   };
 
+  // ── Helper to convert URI to Base64 ─────────────────────────────────────────
+  const toBase64 = async (uri: string): Promise<string> => {
+    const response = await fetch(uri);
+    const blob = await response.blob();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  };
+
   // ── Upload all picked files then mark task complete ──────────────────────────
   const handleProofSubmit = async (files: PickedFile[]) => {
     setUploadingProof(true);
@@ -372,14 +384,30 @@ export default function MemberTaskDetailScreen() {
       const attachmentUrls: string[] = [];
       
       for (const file of files) {
-        const uploadData = await uploadFile(file.uri, file.name, file.mimeType);
-        if (uploadData?.url) {
-          attachmentUrls.push(uploadData.url);
+        if (file.type === 'video') {
+          // Videos go to Cloudinary
+          const uploadData = await uploadFile(file.uri, file.name, file.mimeType);
+          if (uploadData?.url) {
+            attachmentUrls.push(uploadData.url);
+          }
+        } else {
+          // Images go to Firestore as Base64 (Data URL)
+          const base64 = await toBase64(file.uri);
+          
+          // Safety check: Firestore document limit is ~1MB
+          // Base64 strings are ~33% larger than binary.
+          // We check if the base64 string is suspiciously large
+          if (base64.length > 800000) { // ~800KB limit for safety
+             Alert.alert('Image too large', `The image "${file.name}" is too large for database storage. Please use a smaller photo.`);
+             setUploadingProof(false);
+             return;
+          }
+          attachmentUrls.push(base64);
         }
       }
 
       if (attachmentUrls.length === 0) {
-        Alert.alert('Upload failed', 'No files could be uploaded. Please try again.');
+        Alert.alert('Upload failed', 'No files could be processed. Please try again.');
         return;
       }
 
@@ -396,9 +424,9 @@ export default function MemberTaskDetailScreen() {
       setTask((prev: any) => ({ ...prev, ...updates }));
       setProofModalVisible(false);
     } catch (e: any) {
-      console.error('Proof upload error:', e);
+      console.error('Proof submission error:', e);
       const msg = e.response?.data?.error || e.message || 'Failed to submit proof. Please try again.';
-      Alert.alert('Upload Error', msg);
+      Alert.alert('Submission Error', msg);
     } finally {
       setUploadingProof(false);
     }
