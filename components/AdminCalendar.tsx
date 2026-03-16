@@ -1,5 +1,5 @@
 import { Text } from '@/components/ui/text';
-import { View, TouchableOpacity, Modal, TextInput, ScrollView } from 'react-native';
+import { View, TouchableOpacity, Modal, TextInput, ScrollView, Platform } from 'react-native';
 import { Alert } from '@/utils/alerts';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useState, useEffect } from 'react';
@@ -423,13 +423,23 @@ export const AdminCalendar = ({
 
         {/* Month navigation */}
         <View className="flex-row items-center justify-between px-4 pt-4 pb-2">
-          <TouchableOpacity onPress={goToPrev} activeOpacity={0.7} className="p-1">
+          <TouchableOpacity 
+            onPress={goToPrev} 
+            activeOpacity={0.7} 
+            className="p-1"
+            style={Platform.OS === 'web' ? { cursor: 'pointer' } as any : {}}
+          >
             <Ionicons name="chevron-back" size={22} color="#6b7280" />
           </TouchableOpacity>
           <Text className="text-base font-bold text-gray-800 dark:text-white">
             {MONTHS[currentMonth]} {currentYear}
           </Text>
-          <TouchableOpacity onPress={goToNext} activeOpacity={0.7} className="p-1">
+          <TouchableOpacity 
+            onPress={goToNext} 
+            activeOpacity={0.7} 
+            className="p-1"
+            style={Platform.OS === 'web' ? { cursor: 'pointer' } as any : {}}
+          >
             <Ionicons name="chevron-forward" size={22} color="#6b7280" />
           </TouchableOpacity>
         </View>
@@ -459,7 +469,10 @@ export const AdminCalendar = ({
                 key={dateStr}
                 onPress={() => setSelectedDate(dateStr)}
                 activeOpacity={0.7}
-                style={{ width: `${100 / 7}%` }}
+                style={{ 
+                  width: '14.28%', 
+                  ...(Platform.OS === 'web' ? { cursor: 'pointer' } : {}) 
+                } as any}
                 className="p-0.5 items-center"
               >
                 <View

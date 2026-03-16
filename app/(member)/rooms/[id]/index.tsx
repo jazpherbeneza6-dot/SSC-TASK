@@ -474,8 +474,23 @@ export default function MemberRoomScreen() {
     }
   };
 
+  const PRIORITY_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 };
+  const getSortDate = (dueDate: string | null) => {
+    if (!dueDate) return 9999999999999;
+    const d = parseDate(dueDate);
+    return d ? d.getTime() : 9999999999999;
+  };
+
   const myTasks      = tasks.filter((t) => t.assignees?.includes(user?.uid));
-  const displayTasks = filterMine ? myTasks : tasks;
+  const baseTasks    = filterMine ? myTasks : tasks;
+
+  // Sort by Due Date then Priority
+  const displayTasks = [...baseTasks].sort((a, b) => {
+    const dateA = getSortDate(a.dueDate);
+    const dateB = getSortDate(b.dueDate);
+    if (dateA !== dateB) return dateA - dateB;
+    return (PRIORITY_ORDER[a.priority] ?? 1) - (PRIORITY_ORDER[b.priority] ?? 1);
+  });
   
   const rejected     = displayTasks.filter((t) => t.status === 'rejected');
   const reviewing    = displayTasks.filter((t) => t.status === 'pending');

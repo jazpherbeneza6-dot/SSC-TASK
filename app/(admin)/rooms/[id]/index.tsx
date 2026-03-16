@@ -794,11 +794,24 @@ export default function AdminRoomDetailScreen() {
     );
   };
 
-  // Sort tasks by priority: high → medium → low
+  // Sort tasks: Primary by Due Date (nearest first), Secondary by Priority (high → medium → low)
   const PRIORITY_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 };
-  const sortedTasks = [...tasks].sort(
-    (a, b) => (PRIORITY_ORDER[a.priority] ?? 1) - (PRIORITY_ORDER[b.priority] ?? 1)
-  );
+
+  const getSortDate = (dueDate: string | null) => {
+    if (!dueDate) return 9999999999999; // Far future for tasks without due date
+    const d = parseDate(dueDate);
+    return d ? d.getTime() : 9999999999999;
+  };
+
+  const sortedTasks = [...tasks].sort((a, b) => {
+    // 1. Due Date (Ascending - nearest first)
+    const dateA = getSortDate(a.dueDate);
+    const dateB = getSortDate(b.dueDate);
+    if (dateA !== dateB) return dateA - dateB;
+
+    // 2. Priority
+    return (PRIORITY_ORDER[a.priority] ?? 1) - (PRIORITY_ORDER[b.priority] ?? 1);
+  });
 
   const pending   = sortedTasks.filter((t) => !t.completed);
   const completed = sortedTasks.filter((t) =>  t.completed);
@@ -936,7 +949,7 @@ export default function AdminRoomDetailScreen() {
                     </Text>
                   </View>
                   <TouchableOpacity
-                    onPress={() => router.push(`(admin)/rooms/${id}/tasks/new` as any)}
+                    onPress={() => router.push({ pathname: `(admin)/rooms/${id}/tasks/new`, params: { folder: selectedFolder } } as any)}
                     activeOpacity={0.7}
                     className="bg-primary rounded-full pl-2 pr-3 py-1 flex-row items-center gap-1"
                   >

@@ -27,6 +27,8 @@ import {
 import { db } from '@/FirebaseConfig';
 import { Image } from 'expo-image';
 import { NativeVideoPlayer } from '@/components/NativeVideoPlayer';
+import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
+import { Platform } from 'react-native';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -158,6 +160,13 @@ export default function TaskDetailsScreen() {
   const [editDescription, setEditDescription] = useState('');
   const [editPriority,    setEditPriority]    = useState<Priority>('medium');
   const [editDueDate,     setEditDueDate]     = useState('');
+  const [showDatePicker,  setShowDatePicker]  = useState(false);
+  const [date,           setDate]           = useState(new Date());
+  const [pickerMonth,    setPickerMonth]    = useState(new Date().getMonth());
+  const [pickerYear,     setPickerYear]     = useState(new Date().getFullYear());
+
+  const toDateStr = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
   // Assignee modal
   const [assigneeModalVisible,  setAssigneeModalVisible]  = useState(false);
@@ -339,6 +348,14 @@ export default function TaskDetailsScreen() {
     setSelectedAssignees((prev) =>
       prev.includes(uid) ? prev.filter((id) => id !== uid) : [...prev, uid]
     );
+  };
+
+  const onDateChange = (event: DateTimePickerEvent, selectedDate?: Date) => {
+    setShowDatePicker(Platform.OS === 'ios');
+    if (selectedDate) {
+      setDate(selectedDate);
+      setEditDueDate(toDateStr(selectedDate));
+    }
   };
 
   const assignedMembers = members.filter((m) => task?.assignees?.includes(m.id));
@@ -776,13 +793,159 @@ export default function TaskDetailsScreen() {
           {/* Due date */}
           <InfoRow icon="calendar-outline" label="Due Date">
             {editing ? (
-              <TextInput
-                value={editDueDate}
-                onChangeText={setEditDueDate}
-                placeholder="MM/DD/YYYY"
-                className="bg-background border border-border rounded-xl px-3 py-2 text-sm text-gray-800 dark:text-white mt-1"
-                placeholderTextColor="#9ca3af"
-              />
+              <>
+                <TouchableOpacity
+                  onPress={() => setShowDatePicker(true)}
+                  activeOpacity={0.7}
+                  className="bg-background border border-border rounded-xl px-3 py-2 mt-1 flex-row items-center justify-between"
+                >
+                  <Text className={`text-sm ${editDueDate ? 'text-gray-800 dark:text-white' : 'text-gray-400'}`}>
+                    {editDueDate || 'MM/DD/YYYY'}
+                  </Text>
+                  {editDueDate.length > 0 && (
+                    <TouchableOpacity onPress={() => setEditDueDate('')}>
+                      <Ionicons name="close-circle" size={16} color="#9ca3af" />
+                    </TouchableOpacity>
+                  )}
+                </TouchableOpacity>
+
+                {showDatePicker && Platform.OS !== 'web' && (
+                  <DateTimePicker
+                    value={date}
+                    mode="date"
+                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                    onChange={onDateChange}
+                    minimumDate={new Date()}
+                  />
+                )}
+
+                {/* Web Date Picker Fallback - Interactive Calendar */}
+                <Modal
+                  visible={showDatePicker && Platform.OS === 'web'}
+                  transparent
+                  animationType="fade"
+                  onRequestClose={() => setShowDatePicker(false)}
+                >
+                  <View className="flex-1 bg-black/50 justify-center items-center p-5">
+                    <View className="bg-background rounded-2xl overflow-hidden w-full max-w-sm border border-border">
+                      {/* Picker Header */}
+                      <View className="bg-primary p-4 flex-row justify-between items-center">
+                        <View>
+                          <Text className="text-white/70 text-xs font-bold uppercase">Select Due Date</Text>
+                          <Text className="text-white text-lg font-bold">
+                            {new Date(pickerYear, pickerMonth).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                          </Text>
+                        </View>
+                        <TouchableOpacity 
+                          onPress={() => setShowDatePicker(false)}
+                          style={Platform.OS === 'web' ? { cursor: 'pointer' } as any : {}}
+                        >
+                          <Ionicons name="close-circle" size={28} color="white" />
+                        </TouchableOpacity>
+                      </View>
+
+                      <View className="p-4 gap-4">
+                        {/* Month Switcher */}
+                        <View className="flex-row justify-between items-center bg-gray-50 dark:bg-gray-800 rounded-xl p-2">
+                          <TouchableOpacity 
+                            onPress={() => {
+                              if (pickerMonth === 0) { setPickerMonth(11); setPickerYear(y => y - 1); }
+                              else setPickerMonth(m => m - 1);
+                            }}
+                            className="p-2"
+                            style={Platform.OS === 'web' ? { cursor: 'pointer' } as any : {}}
+                          >
+                            <Ionicons name="chevron-back" size={20} color="#6366f1" />
+                          </TouchableOpacity>
+                          <Text className="font-bold text-gray-700 dark:text-gray-200">
+                            {new Date(pickerYear, pickerMonth).toLocaleDateString('en-US', { month: 'short' })}
+                          </Text>
+                          <TouchableOpacity 
+                            onPress={() => {
+                              if (pickerMonth === 11) { setPickerMonth(0); setPickerYear(y => y + 1); }
+                              else setPickerMonth(m => m + 1);
+                            }}
+                            className="p-2"
+                            style={Platform.OS === 'web' ? { cursor: 'pointer' } as any : {}}
+                          >
+                            <Ionicons name="chevron-forward" size={20} color="#6366f1" />
+                          </TouchableOpacity>
+                        </View>
+
+                        {/* Calendar Grid */}
+                        <View>
+                          <View className="flex-row mb-1">
+                            {['S','M','T','W','T','F','S'].map((d, i) => (
+                              <Text key={i} className="flex-1 text-center text-[10px] font-bold text-gray-400">{d}</Text>
+                            ))}
+                          </View>
+                          <View className="flex-row flex-wrap">
+                            {(() => {
+                              const firstDay = new Date(pickerYear, pickerMonth, 1).getDay();
+                              const daysInMonth = new Date(pickerYear, pickerMonth + 1, 0).getDate();
+                              const cells = [];
+                              for(let i=0; i<firstDay; i++) cells.push(<View key={`b-${i}`} style={{ width: '14.28%' }} className="h-9" />);
+                              for(let d=1; d<=daysInMonth; d++) {
+                                const isSelected = editDueDate === `${pickerYear}-${String(pickerMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+                                const isToday = toDateStr(new Date()) === `${pickerYear}-${String(pickerMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+                                cells.push(
+                                  <TouchableOpacity 
+                                    key={d} 
+                                    onPress={() => {
+                                      const selected = `${pickerYear}-${String(pickerMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+                                      setEditDueDate(selected);
+                                      setDate(new Date(pickerYear, pickerMonth, d));
+                                      setShowDatePicker(false);
+                                    }}
+                                    style={[{ width: '14.28%' }, Platform.OS === 'web' ? { cursor: 'pointer' } : {}] as any}
+                                    className="h-9 items-center justify-center"
+                                  >
+                                    <View className={`w-8 h-8 rounded-full items-center justify-center ${isSelected ? 'bg-primary' : isToday ? 'bg-primary/10' : ''}`}>
+                                      <Text className={`text-xs font-bold ${isSelected ? 'text-white' : isToday ? 'text-primary' : 'text-gray-700 dark:text-gray-200'}`}>
+                                        {d}
+                                      </Text>
+                                    </View>
+                                  </TouchableOpacity>
+                                );
+                              }
+                              return cells;
+                            })()}
+                          </View>
+                        </View>
+
+                        {/* Quick Options */}
+                        <View className="flex-row gap-2 border-t border-border pt-4">
+                          <TouchableOpacity 
+                            onPress={() => {
+                              const today = new Date();
+                              setEditDueDate(toDateStr(today));
+                              setDate(today);
+                              setShowDatePicker(false);
+                            }}
+                            className="flex-1 bg-gray-100 dark:bg-gray-800 py-2.5 rounded-xl items-center"
+                            style={Platform.OS === 'web' ? { cursor: 'pointer' } as any : {}}
+                          >
+                            <Text className="text-xs font-bold text-gray-600 dark:text-gray-400">Today</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity 
+                            onPress={() => {
+                              const tomorrow = new Date();
+                              tomorrow.setDate(tomorrow.getDate() + 1);
+                              setEditDueDate(toDateStr(tomorrow));
+                              setDate(tomorrow);
+                              setShowDatePicker(false);
+                            }}
+                            className="flex-1 bg-gray-100 dark:bg-gray-800 py-2.5 rounded-xl items-center"
+                            style={Platform.OS === 'web' ? { cursor: 'pointer' } as any : {}}
+                          >
+                            <Text className="text-xs font-bold text-gray-600 dark:text-gray-400">Tomorrow</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    </View>
+                  </View>
+                </Modal>
+              </>
             ) : task.dueDate ? (
               <View className="mt-0.5">
                 <Text className="text-sm font-medium text-gray-800 dark:text-white">{task.dueDate}</Text>

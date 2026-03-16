@@ -17,6 +17,10 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useState, useEffect } from 'react';
 import { collection, addDoc, getDocs, query, where, serverTimestamp } from 'firebase/firestore';
 import { db } from '@/FirebaseConfig';
+import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
+
+const toDateStr = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 type Priority = 'low' | 'medium' | 'high';
 
@@ -57,17 +61,21 @@ const StyledInput = ({
 
 export default function CreateTaskScreen() {
   const router = useRouter();
-  const { id: roomId } = useLocalSearchParams<{ id: string }>();
+  const { id: roomId, folder: initialFolder } = useLocalSearchParams<{ id: string; folder?: string }>();
   const { user } = useAuth();
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState<Priority>('medium');
   const [dueDate, setDueDate] = useState('');
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [date, setDate] = useState(new Date());
   const [creating, setCreating] = useState(false);
+  const [pickerMonth, setPickerMonth] = useState(new Date().getMonth());
+  const [pickerYear, setPickerYear] = useState(new Date().getFullYear());
 
   // Folder
-  const [folder, setFolder] = useState('');
+  const [folder, setFolder] = useState(initialFolder || '');
   const [existingFolders, setExistingFolders] = useState<string[]>([]);
 
   // Assignee picker
@@ -139,6 +147,14 @@ export default function CreateTaskScreen() {
     setCreating(false);
   };
 
+  const onDateChange = (event: DateTimePickerEvent, selectedDate?: Date) => {
+    setShowDatePicker(Platform.OS === 'ios');
+    if (selectedDate) {
+      setDate(selectedDate);
+      setDueDate(toDateStr(selectedDate));
+    }
+  };
+
   const selectedMemberNames = members
     .filter((m) => selectedAssignees.includes(m.id))
     .map((m) => m.firstname + ' ' + m.lastname || m.email || 'Member');
@@ -187,52 +203,54 @@ export default function CreateTaskScreen() {
           />
         </View>
 
-        {/* Folder */}
-        <View>
-          <SectionLabel>Folder</SectionLabel>
-          <View className="flex-row items-center bg-card border border-border rounded-xl px-4 py-3 gap-2">
-            <Ionicons name="folder-outline" size={16} color="#9ca3af" />
-            <TextInput
-              value={folder}
-              onChangeText={setFolder}
-              placeholder="Type folder name (optional)"
-              className="flex-1 text-sm text-gray-800 dark:text-white"
-              placeholderTextColor="#9ca3af"
-            />
-            {folder.length > 0 && (
-              <TouchableOpacity onPress={() => setFolder('')}>
-                <Ionicons name="close-circle" size={16} color="#9ca3af" />
-              </TouchableOpacity>
+        {/* Folder - Hidden if pre-selected */}
+        {!initialFolder && (
+          <View>
+            <SectionLabel>Folder</SectionLabel>
+            <View className="flex-row items-center bg-card border border-border rounded-xl px-4 py-3 gap-2">
+              <Ionicons name="folder-outline" size={16} color="#9ca3af" />
+              <TextInput
+                value={folder}
+                onChangeText={setFolder}
+                placeholder="Type folder name (optional)"
+                className="flex-1 text-sm text-gray-800 dark:text-white"
+                placeholderTextColor="#9ca3af"
+              />
+              {folder.length > 0 && (
+                <TouchableOpacity onPress={() => setFolder('')}>
+                  <Ionicons name="close-circle" size={16} color="#9ca3af" />
+                </TouchableOpacity>
+              )}
+            </View>
+            {existingFolders.length > 0 && (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                className="mt-2"
+                contentContainerStyle={{ gap: 8 }}
+              >
+                {existingFolders.map((f) => {
+                  const active = folder === f;
+                  return (
+                    <TouchableOpacity
+                      key={f}
+                      onPress={() => setFolder(active ? '' : f)}
+                      activeOpacity={0.7}
+                      className={`flex-row items-center gap-1.5 px-3 py-1.5 rounded-full border ${
+                        active ? 'bg-primary border-primary' : 'bg-card border-border'
+                      }`}
+                    >
+                      <Ionicons name="folder" size={12} color={active ? 'white' : '#6b7280'} />
+                      <Text className={`text-xs font-semibold ${active ? 'text-white' : 'text-gray-600 dark:text-gray-400'}`}>
+                        {f}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
             )}
           </View>
-          {existingFolders.length > 0 && (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              className="mt-2"
-              contentContainerStyle={{ gap: 8 }}
-            >
-              {existingFolders.map((f) => {
-                const active = folder === f;
-                return (
-                  <TouchableOpacity
-                    key={f}
-                    onPress={() => setFolder(active ? '' : f)}
-                    activeOpacity={0.7}
-                    className={`flex-row items-center gap-1.5 px-3 py-1.5 rounded-full border ${
-                      active ? 'bg-primary border-primary' : 'bg-card border-border'
-                    }`}
-                  >
-                    <Ionicons name="folder" size={12} color={active ? 'white' : '#6b7280'} />
-                    <Text className={`text-xs font-semibold ${active ? 'text-white' : 'text-gray-600 dark:text-gray-400'}`}>
-                      {f}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          )}
-        </View>
+        )}
 
         {/* Priority */}
         <View>
@@ -271,16 +289,166 @@ export default function CreateTaskScreen() {
         {/* Due Date */}
         <View>
           <SectionLabel>Due Date</SectionLabel>
-          <View className="flex-row items-center bg-card border border-border rounded-xl px-4 py-3 gap-2">
+          <TouchableOpacity
+            onPress={() => setShowDatePicker(true)}
+            activeOpacity={0.7}
+            className="flex-row items-center bg-card border border-border rounded-xl px-4 py-3 gap-2"
+          >
             <Ionicons name="calendar-outline" size={16} color="#9ca3af" />
-            <TextInput
-              value={dueDate}
-              onChangeText={setDueDate}
-              placeholder="MM/DD/YYYY (optional)"
-              className="flex-1 text-sm text-gray-800 dark:text-white"
-              placeholderTextColor="#9ca3af"
+            <Text
+              className={`flex-1 text-sm ${
+                dueDate ? 'text-gray-800 dark:text-white' : 'text-gray-400'
+              }`}
+            >
+              {dueDate || 'Select due date (optional)'}
+            </Text>
+            {dueDate.length > 0 && (
+              <TouchableOpacity
+                onPress={(e) => {
+                  e.stopPropagation();
+                  setDueDate('');
+                }}
+              >
+                <Ionicons name="close-circle" size={16} color="#9ca3af" />
+              </TouchableOpacity>
+            )}
+          </TouchableOpacity>
+          {showDatePicker && Platform.OS !== 'web' && (
+            <DateTimePicker
+              value={date}
+              mode="date"
+              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+              onChange={onDateChange}
+              minimumDate={new Date()}
             />
-          </View>
+          )}
+
+          {/* Web Date Picker Fallback - Interactive Calendar */}
+          <Modal
+            visible={showDatePicker && Platform.OS === 'web'}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setShowDatePicker(false)}
+          >
+            <View className="flex-1 bg-black/50 justify-center items-center p-5">
+              <View className="bg-background rounded-2xl overflow-hidden w-full max-w-sm border border-border">
+                {/* Picker Header */}
+                <View className="bg-primary p-4 flex-row justify-between items-center">
+                  <View>
+                    <Text className="text-white/70 text-xs font-bold uppercase">Select Due Date</Text>
+                    <Text className="text-white text-lg font-bold">
+                      {new Date(pickerYear, pickerMonth).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                    </Text>
+                  </View>
+                  <TouchableOpacity 
+                    onPress={() => setShowDatePicker(false)}
+                    style={Platform.OS === 'web' ? { cursor: 'pointer' } as any : {}}
+                  >
+                    <Ionicons name="close-circle" size={28} color="white" />
+                  </TouchableOpacity>
+                </View>
+
+                <View className="p-4 gap-4">
+                  {/* Month Switcher */}
+                  <View className="flex-row justify-between items-center bg-gray-50 dark:bg-gray-800 rounded-xl p-2">
+                    <TouchableOpacity 
+                      onPress={() => {
+                        if (pickerMonth === 0) { setPickerMonth(11); setPickerYear(y => y - 1); }
+                        else setPickerMonth(m => m - 1);
+                      }}
+                      className="p-2"
+                      style={Platform.OS === 'web' ? { cursor: 'pointer' } as any : {}}
+                    >
+                      <Ionicons name="chevron-back" size={20} color="#6366f1" />
+                    </TouchableOpacity>
+                    <Text className="font-bold text-gray-700 dark:text-gray-200">
+                      {new Date(pickerYear, pickerMonth).toLocaleDateString('en-US', { month: 'short' })}
+                    </Text>
+                    <TouchableOpacity 
+                      onPress={() => {
+                        if (pickerMonth === 11) { setPickerMonth(0); setPickerYear(y => y + 1); }
+                        else setPickerMonth(m => m + 1);
+                      }}
+                      className="p-2"
+                      style={Platform.OS === 'web' ? { cursor: 'pointer' } as any : {}}
+                    >
+                      <Ionicons name="chevron-forward" size={20} color="#6366f1" />
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Calendar Grid */}
+                  <View>
+                    <View className="flex-row mb-1">
+                      {['S','M','T','W','T','F','S'].map((d, i) => (
+                        <Text key={i} className="flex-1 text-center text-[10px] font-bold text-gray-400">{d}</Text>
+                      ))}
+                    </View>
+                    <View className="flex-row flex-wrap">
+                      {(() => {
+                        const firstDay = new Date(pickerYear, pickerMonth, 1).getDay();
+                        const daysInMonth = new Date(pickerYear, pickerMonth + 1, 0).getDate();
+                        const cells = [];
+                        for(let i=0; i<firstDay; i++) cells.push(<View key={`b-${i}`} style={{ width: '14.28%' }} className="h-9" />);
+                        for(let d=1; d<=daysInMonth; d++) {
+                          const isSelected = dueDate === `${pickerYear}-${String(pickerMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+                          const isToday = toDateStr(new Date()) === `${pickerYear}-${String(pickerMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+                          cells.push(
+                            <TouchableOpacity 
+                              key={d} 
+                              onPress={() => {
+                                const selected = `${pickerYear}-${String(pickerMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+                                setDueDate(selected);
+                                setDate(new Date(pickerYear, pickerMonth, d));
+                                setShowDatePicker(false);
+                              }}
+                              style={[{ width: '14.28%' }, Platform.OS === 'web' ? { cursor: 'pointer' } : {}] as any}
+                              className="h-9 items-center justify-center"
+                            >
+                              <View className={`w-8 h-8 rounded-full items-center justify-center ${isSelected ? 'bg-primary' : isToday ? 'bg-primary/10' : ''}`}>
+                                <Text className={`text-xs font-bold ${isSelected ? 'text-white' : isToday ? 'text-primary' : 'text-gray-700 dark:text-gray-200'}`}>
+                                  {d}
+                                </Text>
+                              </View>
+                            </TouchableOpacity>
+                          );
+                        }
+                        return cells;
+                      })()}
+                    </View>
+                  </View>
+
+                  {/* Quick Options */}
+                  <View className="flex-row gap-2 border-t border-border pt-4">
+                    <TouchableOpacity 
+                      onPress={() => {
+                        const today = new Date();
+                        setDueDate(toDateStr(today));
+                        setDate(today);
+                        setShowDatePicker(false);
+                      }}
+                      className="flex-1 bg-gray-100 dark:bg-gray-800 py-2.5 rounded-xl items-center"
+                      style={Platform.OS === 'web' ? { cursor: 'pointer' } as any : {}}
+                    >
+                      <Text className="text-xs font-bold text-gray-600 dark:text-gray-400">Today</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity 
+                      onPress={() => {
+                        const tomorrow = new Date();
+                        tomorrow.setDate(tomorrow.getDate() + 1);
+                        setDueDate(toDateStr(tomorrow));
+                        setDate(tomorrow);
+                        setShowDatePicker(false);
+                      }}
+                      className="flex-1 bg-gray-100 dark:bg-gray-800 py-2.5 rounded-xl items-center"
+                      style={Platform.OS === 'web' ? { cursor: 'pointer' } as any : {}}
+                    >
+                      <Text className="text-xs font-bold text-gray-600 dark:text-gray-400">Tomorrow</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            </View>
+          </Modal>
         </View>
 
         {/* Assignees */}
